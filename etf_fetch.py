@@ -68,6 +68,12 @@ class DataExtractor:
 
         self._init_database()
 
+    @staticmethod
+    def _summary(isin: str, name: str, source: str, df: pd.DataFrame) -> str:
+        """One-line result: ISIN, name, source, count and covered date range."""
+        span = f"{df.index.min():%Y-%m-%d} to {df.index.max():%Y-%m-%d}"
+        return f"✓ {isin} {name} — {len(df)} trading days via {source} ({span})"
+
     def _load_universe(self) -> Dict[str, ETFDefinition]:
         """Load ETF universe from config."""
         config = self.config_manager.config
@@ -154,10 +160,6 @@ class DataExtractor:
 
         try:
             xid = get_xid(ticker)
-            logger.info(
-                f"Fetching {ticker} (XID {xid}) from "
-                f"{self.start_date:%Y-%m-%d} to {self.end_date:%Y-%m-%d}"
-            )
             df = get_historical_prices(
                 xid,
                 self.start_date.strftime("%d%m%Y"),
@@ -232,11 +234,9 @@ class DataExtractor:
             if not etf:
                 continue
 
-            logger.info(f"Fetching {etf.name} ({isin})...")
-
             cached, df = self._is_cached(isin)
             if cached and df is not None and not df.empty:
-                logger.info(f"✓ {isin} loaded from cache ({len(df)} observations)")
+                logger.info(self._summary(isin, etf.name, "cache", df))
                 data_dict[isin] = df['close']
                 continue
 
@@ -244,21 +244,21 @@ class DataExtractor:
                 df = self._fetch_ftgo(ticker)
                 if df is not None and not df.empty:
                     self._save_prices(isin, df)
-                    logger.info(f"✓ {isin} fetched via ftgo ({ticker}, {len(df)} trading days)")
+                    logger.info(self._summary(isin, etf.name, f"ftgo ({ticker})", df))
                     data_dict[isin] = df['Close']
                     break
 
                 df = self._fetch_yfinance(ticker)
                 if df is not None and not df.empty:
                     self._save_prices(isin, df)
-                    logger.info(f"✓ {isin} fetched via yfinance ({ticker}, {len(df)} trading days)")
+                    logger.info(self._summary(isin, etf.name, f"yfinance ({ticker})", df))
                     data_dict[isin] = df['Close']
                     break
 
                 time.sleep(0.5)
 
             if isin not in data_dict:
-                logger.warning(f"✗ {isin} - All sources failed")
+                logger.warning(f"✗ {isin} {etf.name} — all sources failed")
 
         if not data_dict:
             raise RuntimeError("No data fetched")
