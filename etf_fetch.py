@@ -117,7 +117,9 @@ class DataExtractor:
             if not df.empty:
                 latest = df.index.max()
                 days_behind = (self.end_date - latest).days
-                if days_behind > 7:
+                # Refetch whenever we're not current; the DO NOTHING upsert
+                # cheaply adds only the missing days.
+                if days_behind > 0:
                     return False, df
 
             return True, df
