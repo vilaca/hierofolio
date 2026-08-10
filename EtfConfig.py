@@ -1,29 +1,59 @@
 #!/usr/bin/env python
 """
-Minimal UCITS ETF Data Extractor for Hierarchical Risk Parity Framework
-
-Uses ISIN-driven configuration with auto-resolved fields from OpenFIGI.
+Hierofolio — Hierarchical Risk Parity for UCITS ETFs
 
 Usage:
-    python extract.py
-    python extract.py etf_universe.yaml
+    hierofolio add IE00BM67HK77
+    hierofolio add IE00BM67HK77 IE00BDBRDM35 IE00BKM4GZ66
+    hierofolio list
+    hierofolio fetch
+    hierofolio fetch IE00BM67HK77
+    hierofolio update
+    hierofolio returns
+    hierofolio summary
+
+Examples:
+    # Add an ETF by ISIN (auto-resolves name, tickers, exchange)
+    hierofolio add IE00BM67HK77
+
+    # Add multiple ETFs
+    hierofolio add IE00BM67HK77 IE00BDBRDM35 IE00BKM4GZ66
+
+    # List all ETFs in configuration
+    hierofolio list
+
+    # Fetch data for all ETFs
+    hierofolio fetch
+
+    # Fetch data for a specific ETF
+    hierofolio fetch IE00BM67HK77
+
+    # Update config from OpenFIGI (refresh metadata)
+    hierofolio update IE00BM67HK77
+
+    # Show returns DataFrame
+    hierofolio returns
+
+    # Show summary statistics
+    hierofolio summary
 """
 
-import pandas as pd
-import numpy as np
+import argparse
+import sys
+import os
+import yaml
+import re
+import requests
 import sqlite3
 import warnings
 import logging
 import time
-import os
-import re
-import yaml
-import sys
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple, List
-from dataclasses import dataclass
+from typing import Optional, Dict, List, Tuple
+from dataclasses import dataclass, field
 
-# Required imports
+import pandas as pd
+import numpy as np
 from ftgo import get_xid, get_historical_prices
 import yfinance as yf
 
@@ -33,8 +63,16 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
 warnings.filterwarnings('ignore')
+
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+DEFAULT_CONFIG = "etf_universe.yaml"
+DEFAULT_DB = "hierofolio.db"
+DEFAULT_START_DATE = "2018-01-01"
 
 
 @dataclass
@@ -48,7 +86,6 @@ class ETFDefinition:
     
     @classmethod
     def from_config(cls, isin: str, data: dict) -> "ETFDefinition":
-        """Create from config dictionary."""
         return cls(
             isin=isin,
             name=data.get('name', isin),
@@ -58,19 +95,150 @@ class ETFDefinition:
         )
 
 
-class UCITSDataExtractor:
-    """
-    Minimal data extractor for UCITS ETFs.
+# ============================================================================
+# OpenFIGI Resolver
+# ============================================================================
+
+class OpenFIGIResolver:
+    """Resolve ISIN to ETF metadata using OpenFIGI API."""
     
-    Database stores only: isin, date, close
-    Configuration loaded from YAML with auto-resolved fields.
-    """
+    BASE_URL = "https://api.openfigi.com/v3/mapping"
+    
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key
+        self.headers = {}
+        if api_key:
+            self.headers['X-OPENFIGI-APIKEY'] = api_key
+        self.session = requests.Session()
+    
+    def resolve(self, isin: str) -> Optional[dict]:
+        """Resolve ISIN to ETF metadata."""
+        if not re.match(r'^[A-Z]{2}[A-Z0-9]{10}$', isin):
+            print(f"✗ Invalid ISIN: {isin}")
+            return None
+        
+        payload = [{"idType": "ID_ISIN", "idValue": isin}]
+        
+        try:
+            response = self.session.post(
+                self.BASE_URL,
+                json=payload,
+                headers=self.headers,
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            if not data or not data[0].get('data'):
+                print(f"✗ No data found for ISIN: {isin}")
+                return None
+            
+            result = data[0]['data'][0]
+            
+            return {
+                'name': result.get('name', f"ETF {isin}"),
+                'tickers': [result.get('ticker')] if result.get('ticker') else [],
+                'exchange': result.get('exchCode', ''),
+                'figi': result.get('figi', ''),
+                'resolved_at': datetime.now().isoformat(),
+                'source': 'OpenFIGI'
+            }
+            
+        except requests.exceptions.RequestException as e:
+            print(f"✗ API error for {isin}: {e}")
+            return None
+        except (KeyError, IndexError, ValueError) as e:
+            print(f"✗ Error parsing response for {isin}: {e}")
+            return None
+
+
+# ============================================================================
+# Config Manager
+# ============================================================================
+
+class ConfigManager:
+    """Manage ETF configuration in YAML file."""
+    
+    def __init__(self, config_path: str = DEFAULT_CONFIG):
+        self.config_path = config_path
+        self.resolver = OpenFIGIResolver()
+        self.config = self._load_config()
+    
+    def _load_config(self) -> dict:
+        if os.path.exists(self.config_path):
+            with open(self.config_path, 'r') as f:
+                return yaml.safe_load(f) or {'etfs': {}}
+        return {'etfs': {}}
+    
+    def _save_config(self):
+        with open(self.config_path, 'w') as f:
+            yaml.dump(self.config, f, default_flow_style=False, sort_keys=False)
+    
+    def add(self, isin: str) -> bool:
+        """Add ETF by ISIN (auto-resolves all fields)."""
+        if isin in self.config.get('etfs', {}):
+            print(f"⚠ ISIN {isin} already exists")
+            return False
+        
+        print(f"🔍 Resolving {isin}...")
+        info = self.resolver.resolve(isin)
+        
+        if not info:
+            return False
+        
+        if 'etfs' not in self.config:
+            self.config['etfs'] = {}
+        
+        self.config['etfs'][isin] = info
+        self._save_config()
+        
+        print(f"✓ Added {isin}")
+        print(f"  Name: {info['name']}")
+        print(f"  Tickers: {', '.join(info['tickers'])}")
+        print(f"  Exchange: {info['exchange']}")
+        print(f"  FIGI: {info['figi']}")
+        return True
+    
+    def list(self) -> List[Tuple[str, dict]]:
+        """List all ETFs in config."""
+        return sorted(self.config.get('etfs', {}).items())
+    
+    def get(self, isin: str) -> Optional[dict]:
+        """Get ETF config by ISIN."""
+        return self.config.get('etfs', {}).get(isin)
+    
+    def update(self, isin: str) -> bool:
+        """Update ETF metadata from OpenFIGI."""
+        if isin not in self.config.get('etfs', {}):
+            print(f"✗ ISIN {isin} not found")
+            return False
+        
+        print(f"🔍 Updating {isin}...")
+        info = self.resolver.resolve(isin)
+        
+        if not info:
+            return False
+        
+        self.config['etfs'][isin] = info
+        self._save_config()
+        
+        print(f"✓ Updated {isin}")
+        print(f"  Name: {info['name']}")
+        return True
+
+
+# ============================================================================
+# Data Extractor
+# ============================================================================
+
+class DataExtractor:
+    """Extract historical price data for ETFs."""
     
     def __init__(
         self,
-        config_path: str = "etf_universe.yaml",
-        db_path: str = "ucits_prices.db",
-        start_date: str = "2018-01-01",
+        config_path: str = DEFAULT_CONFIG,
+        db_path: str = DEFAULT_DB,
+        start_date: str = DEFAULT_START_DATE,
         end_date: Optional[str] = None,
         force_refresh: bool = False
     ):
@@ -80,17 +248,11 @@ class UCITSDataExtractor:
         self.end_date = pd.to_datetime(end_date) if end_date else pd.Timestamp.now()
         self.force_refresh = force_refresh
         
-        # Validate config exists
-        if not os.path.exists(config_path):
-            raise FileNotFoundError(
-                f"Configuration file not found: {config_path}\n"
-                f"Please create it using: python manage_etf.py <ISIN>"
-            )
+        # Load config
+        self.config_manager = ConfigManager(config_path)
+        self.etf_universe = self._load_universe()
         
-        # Load configuration
-        self.etf_universe = self._load_config(config_path)
-        
-        # Rate limit tracking
+        # Rate limiting
         self._ftgo_throttled = False
         self._ftgo_wait_until = None
         self._yf_throttled = False
@@ -99,34 +261,21 @@ class UCITSDataExtractor:
         # Cache
         self._data_cache = {}
         
-        # Initialize database
         self._init_database()
-        
-        logger.info(f"Loaded {len(self.etf_universe)} ETFs from {config_path}")
-        logger.info(f"Database: {db_path}")
     
-    def _load_config(self, config_path: str) -> Dict[str, ETFDefinition]:
-        """Load ETF universe from YAML configuration."""
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        
-        if not config or 'etfs' not in config:
-            raise ValueError(f"Invalid config: {config_path} must contain 'etfs' key")
-        
+    def _load_universe(self) -> Dict[str, ETFDefinition]:
+        """Load ETF universe from config."""
+        config = self.config_manager.config
         universe = {}
         for isin, data in config.get('etfs', {}).items():
             if not data.get('tickers'):
-                raise ValueError(f"ETF {isin} has no tickers. Please re-add using manage_etf.py.")
+                continue
             universe[isin] = ETFDefinition.from_config(isin, data)
-        
         return universe
     
     def _init_database(self):
-        """Create database file and schema if they don't exist."""
         with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            
-            cursor.execute("""
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS prices (
                     isin TEXT,
                     date TEXT,
@@ -134,16 +283,13 @@ class UCITSDataExtractor:
                     PRIMARY KEY (isin, date)
                 )
             """)
-            
-            cursor.execute("""
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_prices_isin_date 
                 ON prices (isin, date)
             """)
-            
             conn.commit()
     
     def _is_cached(self, isin: str) -> Tuple[bool, Optional[pd.DataFrame]]:
-        """Check if data exists in cache."""
         if self.force_refresh:
             return False, None
         
@@ -172,7 +318,6 @@ class UCITSDataExtractor:
             return True, df
     
     def _save_prices(self, isin: str, df: pd.DataFrame):
-        """Save price data to database."""
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM prices WHERE isin = ?", (isin,))
             
@@ -180,19 +325,15 @@ class UCITSDataExtractor:
             df_to_save['isin'] = isin
             df_to_save.reset_index(inplace=True)
             df_to_save.rename(columns={'index': 'date', 'Close': 'close'}, inplace=True)
-            
             df_to_save[['isin', 'date', 'close']].to_sql(
                 'prices', conn, if_exists='append', index=False
             )
-            
             conn.commit()
     
     def _fetch_ftgo(self, ticker: str) -> Optional[pd.DataFrame]:
-        """Fetch data using ftgo."""
         if self._ftgo_throttled:
             if self._ftgo_wait_until and datetime.now() < self._ftgo_wait_until:
                 wait_seconds = (self._ftgo_wait_until - datetime.now()).total_seconds()
-                logger.debug(f"ftgo throttled, waiting {wait_seconds:.1f}s")
                 time.sleep(wait_seconds + 1)
                 self._ftgo_throttled = False
             else:
@@ -218,24 +359,17 @@ class UCITSDataExtractor:
                 wait_match = re.search(r'wait\s+(\d+)\s*(?:second|minute)', error_str, re.IGNORECASE)
                 if wait_match:
                     value = int(wait_match.group(1))
-                    if 'minute' in wait_match.group(0).lower():
-                        wait_seconds = value * 60
-                    else:
-                        wait_seconds = value
+                    wait_seconds = value * 60 if 'minute' in wait_match.group(0).lower() else value
                 else:
                     wait_seconds = 60
                 self._ftgo_wait_until = datetime.now() + timedelta(seconds=wait_seconds)
                 logger.warning(f"ftgo rate limited. Waiting {wait_seconds}s")
-            else:
-                logger.debug(f"ftgo failed for {ticker}: {e}")
         return None
     
     def _fetch_yfinance(self, ticker: str) -> Optional[pd.DataFrame]:
-        """Fetch data using yfinance."""
         if self._yf_throttled:
             if self._yf_wait_until and datetime.now() < self._yf_wait_until:
                 wait_seconds = (self._yf_wait_until - datetime.now()).total_seconds()
-                logger.debug(f"yfinance throttled, waiting {wait_seconds:.1f}s")
                 time.sleep(wait_seconds + 1)
                 self._yf_throttled = False
             else:
@@ -252,87 +386,68 @@ class UCITSDataExtractor:
                 if df is not None and not df.empty:
                     return df[['Close']]
         except Exception as e:
-            error_str = str(e)
-            if '429' in error_str or 'rate limit' in error_str.lower():
+            if '429' in str(e) or 'rate limit' in str(e).lower():
                 self._yf_throttled = True
                 self._yf_wait_until = datetime.now() + timedelta(seconds=60)
-                logger.warning(f"yfinance rate limited. Waiting 60s")
-            else:
-                logger.debug(f"yfinance failed for {ticker}: {e}")
+                logger.warning("yfinance rate limited. Waiting 60s")
         return None
     
-    def fetch_etf(self, isin: str, skip_cache: bool = False) -> Optional[pd.DataFrame]:
-        """Fetch data for a single ETF."""
-        if isin not in self.etf_universe:
-            logger.error(f"ISIN {isin} not in universe")
-            return None
+    def fetch(self, isin: Optional[str] = None) -> pd.DataFrame:
+        """Fetch data for specific ISIN or all ETFs."""
+        if isin:
+            etfs = {isin: self.etf_universe.get(isin)}
+            if not etfs[isin]:
+                raise ValueError(f"ISIN {isin} not in config")
+        else:
+            etfs = self.etf_universe
         
-        etf = self.etf_universe[isin]
-        logger.info(f"Fetching {etf.name} ({isin})...")
-        
-        if not skip_cache:
+        data_dict = {}
+        for isin, etf in etfs.items():
+            if not etf:
+                continue
+            
+            logger.info(f"Fetching {etf.name} ({isin})...")
+            
             cached, df = self._is_cached(isin)
             if cached and df is not None and not df.empty:
                 logger.info(f"✓ {isin} loaded from cache ({len(df)} observations)")
-                return df
-        
-        for ticker in etf.tickers:
-            logger.debug(f"  Trying {ticker}...")
-            
-            df = self._fetch_ftgo(ticker)
-            if df is not None and not df.empty:
-                self._save_prices(isin, df)
-                logger.info(f"✓ {isin} fetched via ftgo ({ticker})")
-                return df
-            
-            df = self._fetch_yfinance(ticker)
-            if df is not None and not df.empty:
-                self._save_prices(isin, df)
-                logger.info(f"✓ {isin} fetched via yfinance ({ticker})")
-                return df
-            
-            time.sleep(0.5)
-        
-        logger.warning(f"✗ {isin} - All sources failed")
-        return None
-    
-    def fetch_all(self, clean: bool = True, skip_cache: bool = False) -> pd.DataFrame:
-        """Fetch data for all ETFs in the universe."""
-        data_dict = {}
-        
-        for isin in self.etf_universe:
-            df = self.fetch_etf(isin, skip_cache=skip_cache)
-            if df is not None and not df.empty:
                 data_dict[isin] = df['Close']
-                self._data_cache[isin] = df
+                continue
+            
+            for ticker in etf.tickers:
+                df = self._fetch_ftgo(ticker)
+                if df is not None and not df.empty:
+                    self._save_prices(isin, df)
+                    logger.info(f"✓ {isin} fetched via ftgo ({ticker})")
+                    data_dict[isin] = df['Close']
+                    break
+                
+                df = self._fetch_yfinance(ticker)
+                if df is not None and not df.empty:
+                    self._save_prices(isin, df)
+                    logger.info(f"✓ {isin} fetched via yfinance ({ticker})")
+                    data_dict[isin] = df['Close']
+                    break
+                
+                time.sleep(0.5)
+            
+            if isin not in data_dict:
+                logger.warning(f"✗ {isin} - All sources failed")
         
         if not data_dict:
-            raise RuntimeError("No data fetched for any ETF")
+            raise RuntimeError("No data fetched")
         
         combined = pd.DataFrame(data_dict)
+        combined = combined.sort_index().ffill().dropna()
         
-        if clean:
-            combined = self._clean_data(combined)
+        if combined.index.tz is not None:
+            combined.index = combined.index.tz_localize(None)
         
+        self._data_cache = data_dict
         return combined
     
-    def _clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Clean and align the combined DataFrame."""
-        df = df.sort_index()
-        df = df.ffill()
-        df = df.dropna()
-        
-        returns = df.pct_change()
-        mask = (returns.abs() <= 0.30).all(axis=1)
-        df = df[mask]
-        
-        if df.index.tz is not None:
-            df.index = df.index.tz_localize(None)
-        
-        return df
-    
-    def get_from_db(self, isin: str = None) -> pd.DataFrame:
-        """Load data directly from database."""
+    def get_prices(self, isin: Optional[str] = None) -> pd.DataFrame:
+        """Load prices from database."""
         with sqlite3.connect(self.db_path) as conn:
             if isin:
                 df = pd.read_sql_query(
@@ -349,109 +464,216 @@ class UCITSDataExtractor:
                     conn,
                     parse_dates=['date']
                 )
-                pivot = df.pivot(index='date', columns='isin', values='close')
-                return pivot
+                return df.pivot(index='date', columns='isin', values='close')
     
-    def get_returns(self, isin: str = None) -> pd.DataFrame:
-        """Get returns directly from the database."""
-        prices = self.get_from_db(isin)
+    def get_returns(self, isin: Optional[str] = None) -> pd.DataFrame:
+        """Get returns from database."""
+        prices = self.get_prices(isin)
         returns = prices.pct_change().dropna()
         return returns
     
     def summary(self) -> pd.DataFrame:
-        """Return a summary of fetched data."""
-        summary_data = []
+        """Get summary of fetched data."""
+        data = []
         for isin, df in self._data_cache.items():
             etf = self.etf_universe.get(isin)
-            summary_data.append({
+            data.append({
                 "ISIN": isin,
                 "Name": etf.name if etf else isin,
-                "Start Date": df.index.min().strftime("%Y-%m-%d") if not df.empty else 'N/A',
-                "End Date": df.index.max().strftime("%Y-%m-%d") if not df.empty else 'N/A',
-                "Observations": len(df)
+                "Start": df.index.min().strftime("%Y-%m-%d") if not df.empty else 'N/A',
+                "End": df.index.max().strftime("%Y-%m-%d") if not df.empty else 'N/A',
+                "Obs": len(df)
             })
-        return pd.DataFrame(summary_data)
+        return pd.DataFrame(data)
 
+
+# ============================================================================
+# CLI
+# ============================================================================
 
 def main():
-    """Main execution function."""
-    print("=" * 70)
-    print("Minimal UCITS ETF Data Extractor")
-    print("=" * 70)
+    parser = argparse.ArgumentParser(
+        prog="hierofolio",
+        description="Hierarchical Risk Parity for UCITS ETFs",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Add an ETF by ISIN
+  hierofolio add IE00BM67HK77
+
+  # Add multiple ETFs
+  hierofolio add IE00BM67HK77 IE00BDBRDM35 IE00BKM4GZ66
+
+  # List all ETFs
+  hierofolio list
+
+  # Fetch data for all ETFs
+  hierofolio fetch
+
+  # Fetch data for specific ETF
+  hierofolio fetch IE00BM67HK77
+
+  # Update ETF metadata
+  hierofolio update IE00BM67HK77
+
+  # Show returns
+  hierofolio returns
+
+  # Show summary
+  hierofolio summary
+        """
+    )
     
-    # Get config path from command line or use default
-    if len(sys.argv) > 1:
-        config_path = sys.argv[1]
-    else:
-        config_path = "etf_universe.yaml"
+    parser.add_argument('--config', '-c', default=DEFAULT_CONFIG, help='Config file path')
+    parser.add_argument('--db', '-d', default=DEFAULT_DB, help='Database file path')
+    parser.add_argument('--start', '-s', default=DEFAULT_START_DATE, help='Start date')
     
-    try:
-        extractor = UCITSDataExtractor(
-            config_path=config_path,
-            db_path="ucits_prices.db",
-            start_date="2018-01-01",
-            end_date=datetime.now().strftime("%Y-%m-%d"),
-            force_refresh=False
-        )
-    except FileNotFoundError as e:
-        print(f"\n✗ Error: {e}")
-        print("\nPlease create a configuration file using:")
-        print("  python manage_etf.py IE00BM67HK77")
+    subparsers = parser.add_subparsers(dest='command', help='Command')
+    
+    # Add
+    add_parser = subparsers.add_parser('add', help='Add ETF by ISIN')
+    add_parser.add_argument('isins', nargs='+', help='ISINs to add')
+    
+    # List
+    list_parser = subparsers.add_parser('list', help='List all ETFs')
+    
+    # Fetch
+    fetch_parser = subparsers.add_parser('fetch', help='Fetch price data')
+    fetch_parser.add_argument('isin', nargs='?', help='ISIN to fetch (all if omitted)')
+    fetch_parser.add_argument('--force', '-f', action='store_true', help='Force refresh')
+    
+    # Update
+    update_parser = subparsers.add_parser('update', help='Update ETF metadata')
+    update_parser.add_argument('isin', help='ISIN to update')
+    
+    # Returns
+    returns_parser = subparsers.add_parser('returns', help='Show returns DataFrame')
+    returns_parser.add_argument('isin', nargs='?', help='ISIN to show (all if omitted)')
+    
+    # Summary
+    summary_parser = subparsers.add_parser('summary', help='Show data summary')
+    
+    args = parser.parse_args()
+    
+    if not args.command:
+        parser.print_help()
         return 1
-    except ValueError as e:
-        print(f"\n✗ Error: {e}")
-        return 1
     
-    print(f"\nLoaded {len(extractor.etf_universe)} ETFs from {config_path}")
-    print(f"Database: {extractor.db_path}\n")
+    # ========================================================================
+    # List
+    # ========================================================================
+    if args.command == 'list':
+        config = ConfigManager(args.config)
+        etfs = config.list()
+        
+        if not etfs:
+            print("No ETFs in configuration")
+            print(f"Add one: hierofolio add IE00BM67HK77")
+            return 0
+        
+        print(f"\n{'ISIN':<14} {'Name':<50} {'Ticker':<12} {'Exchange'}")
+        print("-" * 90)
+        for isin, data in etfs:
+            name = data.get('name', 'Unknown')[:48]
+            ticker = data.get('tickers', [''])[0] if data.get('tickers') else ''
+            exchange = data.get('exchange', '')
+            print(f"{isin:<14} {name:<50} {ticker:<12} {exchange}")
+        print(f"\nTotal: {len(etfs)} ETFs")
+        print(f"Config: {args.config}")
+        return 0
     
-    try:
-        prices = extractor.fetch_all(clean=True)
-        print(f"\n✓ Successfully fetched data for {len(prices.columns)} ETFs")
-        print(f"  Date range: {prices.index.min()} to {prices.index.max()}")
-        print(f"  Observations: {len(prices)}")
-    except Exception as e:
-        print(f"\n✗ Error: {e}")
-        return 1
+    # ========================================================================
+    # Add
+    # ========================================================================
+    if args.command == 'add':
+        config = ConfigManager(args.config)
+        success = 0
+        for isin in args.isins:
+            if config.add(isin):
+                success += 1
+            print()
+        print(f"✓ Added {success}/{len(args.isins)} ETFs")
+        return 0 if success == len(args.isins) else 1
     
-    print("\n" + "=" * 70)
-    print("Data Summary")
-    print("=" * 70)
-    summary_df = extractor.summary()
-    print(summary_df.to_string(index=False))
+    # ========================================================================
+    # Update
+    # ========================================================================
+    if args.command == 'update':
+        config = ConfigManager(args.config)
+        success = config.update(args.isin)
+        return 0 if success else 1
     
-    print("\n" + "=" * 70)
-    print("Sample Data (Last 5 days)")
-    print("=" * 70)
-    print(prices.tail())
+    # ========================================================================
+    # Fetch
+    # ========================================================================
+    if args.command == 'fetch':
+        try:
+            extractor = DataExtractor(
+                config_path=args.config,
+                db_path=args.db,
+                start_date=args.start,
+                force_refresh=args.force
+            )
+            prices = extractor.fetch(args.isin)
+            print(f"✓ Fetched {len(prices.columns)} ETFs")
+            print(f"  Date range: {prices.index.min()} to {prices.index.max()}")
+            print(f"  Observations: {len(prices)}")
+        except Exception as e:
+            print(f"✗ Error: {e}")
+            return 1
+        return 0
     
-    returns = prices.pct_change().dropna()
+    # ========================================================================
+    # Returns
+    # ========================================================================
+    if args.command == 'returns':
+        try:
+            extractor = DataExtractor(config_path=args.config, db_path=args.db)
+            returns = extractor.get_returns(args.isin)
+            print(f"Returns for {len(returns.columns)} ETFs")
+            print(f"Date range: {returns.index.min()} to {returns.index.max()}")
+            print("\nLast 10 returns:")
+            print(returns.tail(10).round(6))
+        except Exception as e:
+            print(f"✗ Error: {e}")
+            return 1
+        return 0
     
-    print("\n" + "=" * 70)
-    print("Returns Statistics (Annualized)")
-    print("=" * 70)
-    ann_returns = (1 + returns.mean()) ** 252 - 1
-    ann_vol = returns.std() * np.sqrt(252)
-    stats = pd.DataFrame({
-        'Ann Return': ann_returns,
-        'Ann Vol': ann_vol,
-        'Sharpe': ann_returns / ann_vol
-    })
-    print(stats.round(4))
+    # ========================================================================
+    # Summary
+    # ========================================================================
+    if args.command == 'summary':
+        try:
+            extractor = DataExtractor(config_path=args.config, db_path=args.db)
+            returns = extractor.get_returns()
+            if returns.empty:
+                print("No returns data. Run: hierofolio fetch")
+                return 1
+            
+            print("\n" + "=" * 70)
+            print("Hierofolio Summary")
+            print("=" * 70)
+            
+            ann_returns = (1 + returns.mean()) ** 252 - 1
+            ann_vol = returns.std() * np.sqrt(252)
+            
+            stats = pd.DataFrame({
+                'Ann Return': ann_returns,
+                'Ann Vol': ann_vol,
+                'Sharpe': ann_returns / ann_vol
+            })
+            print("\nAnnualized Statistics:")
+            print(stats.round(4))
+            
+            print("\nCorrelation Matrix:")
+            print(returns.corr().round(3))
+            
+            print("\n" + "=" * 70)
+            print("Ready for HRPRiskModel:")
+            print("""
+    from hierofolio import DataExtractor, HRPRiskModel
     
-    print("\n" + "=" * 70)
-    print("Correlation Matrix")
-    print("=" * 70)
-    print(returns.corr().round(3))
-    
-    print("\n" + "=" * 70)
-    print("Ready for HRPRiskModel")
-    print("=" * 70)
-    print("""
-    from your_risk_model import HRPRiskModel
-    
-    # Load returns directly from database
-    extractor = UCITSDataExtractor("etf_universe.yaml")
+    extractor = DataExtractor()
     returns = extractor.get_returns()
     
     risk_model = HRPRiskModel(
@@ -461,7 +683,11 @@ def main():
         cluster_mode="full",
         linkage_method="ward"
     )
-    """)
+            """)
+        except Exception as e:
+            print(f"✗ Error: {e}")
+            return 1
+        return 0
     
     return 0
 
