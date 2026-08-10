@@ -154,6 +154,10 @@ class DataExtractor:
 
         try:
             xid = get_xid(ticker)
+            logger.info(
+                f"Fetching {ticker} (XID {xid}) from "
+                f"{self.start_date:%Y-%m-%d} to {self.end_date:%Y-%m-%d}"
+            )
             df = get_historical_prices(
                 xid,
                 self.start_date.strftime("%d%m%Y"),
@@ -240,14 +244,14 @@ class DataExtractor:
                 df = self._fetch_ftgo(ticker)
                 if df is not None and not df.empty:
                     self._save_prices(isin, df)
-                    logger.info(f"✓ {isin} fetched via ftgo ({ticker})")
+                    logger.info(f"✓ {isin} fetched via ftgo ({ticker}, {len(df)} trading days)")
                     data_dict[isin] = df['Close']
                     break
 
                 df = self._fetch_yfinance(ticker)
                 if df is not None and not df.empty:
                     self._save_prices(isin, df)
-                    logger.info(f"✓ {isin} fetched via yfinance ({ticker})")
+                    logger.info(f"✓ {isin} fetched via yfinance ({ticker}, {len(df)} trading days)")
                     data_dict[isin] = df['Close']
                     break
 
@@ -275,6 +279,9 @@ def main():
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     warnings.filterwarnings('ignore')
+    # ftgo logs its own progress using the DDMMYYYY strings it requires;
+    # quiet it and emit our own yyyy-mm-dd lines instead.
+    logging.getLogger("ftgo").setLevel(logging.WARNING)
 
     parser = argparse.ArgumentParser(
         prog="etf_fetch",
