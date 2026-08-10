@@ -72,6 +72,41 @@ The optimizers require `cvxpy` (included in `requirements.txt`).
 pytest test_riskmodel.py
 ```
 
+## FAQ
+
+**If I run `./etf_fetch.py` again, what happens?**
+Each ISIN is only re-downloaded when its newest stored date isn't today
+(`days_behind > 0`). If it's already current, that ISIN loads from the DB
+(cache) with no network call. Otherwise it re-fetches and inserts only the
+missing days — existing rows are left untouched.
+
+**What if I run it again after the trading day completes?**
+It picks up the new day. Once the newest stored date is behind "today", the
+next run re-fetches and the upsert appends the newly published close. (Before
+the change to `days_behind > 0`, a 7-day gate meant a plain run could skip new
+days for up to a week — `--force` was the workaround.)
+
+**Why is there no data for today's date?**
+The source only returns *completed* trading days, so today's close isn't
+available until after the market closes. Days with no source data are never
+stored as empty/placeholder rows — they simply don't appear.
+
+**What are "data points" / "trading days" — are they days?**
+Yes. One row per day the market was open. Weekends and exchange holidays are
+absent, so ~252 rows per year, one `close` each.
+
+**What does `Observations: N` mean?**
+It's the row count of the *combined* price matrix across all ETFs, not one
+fund. Dates are the union of every ETF's trading days, forward-filled across
+gaps, then rows still missing any ETF are dropped. Because different exchanges
+have different holiday calendars, this union can exceed any single ETF's count.
+
+**Why do I get the same output with and without `--force`?**
+The summary reports the final data, which is the same either way. `--force`
+only (a) re-fetches even when an ISIN is already current to today, and
+(b) overwrites existing rows instead of keeping them — visible only if the
+source restated a past close. Same prices in the DB → same output.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
