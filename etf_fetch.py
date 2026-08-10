@@ -318,9 +318,10 @@ Examples:
             force_refresh=args.force
         )
         prices = extractor.fetch(args.isin)
-        print(f"✓ Fetched {len(prices.columns)} ETFs")
-        print(f"  Date range: {prices.index.min()} to {prices.index.max()}")
-        print(f"  Observations: {len(prices)}")
+        logger.info(
+            f"Fetched {len(prices.columns)} ETFs, {len(prices)} observations "
+            f"({prices.index.min():%Y-%m-%d} to {prices.index.max():%Y-%m-%d})"
+        )
     except Exception as e:
         print(f"✗ Error: {e}")
         return 1
