@@ -123,15 +123,21 @@ class DataExtractor:
             return True, df
 
     def _save_prices(self, isin: str, df: pd.DataFrame):
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("DELETE FROM prices WHERE isin = ?", (isin,))
+        prices = df[['Close']].copy()
+        prices.columns = ['close']            # flattens yfinance's MultiIndex too
+        prices.index = pd.to_datetime(prices.index).strftime('%Y-%m-%d %H:%M:%S')
+        rows = [(isin, date, float(close)) for date, close in prices['close'].items()]
 
-            df_to_save = df[['Close']].copy()
-            df_to_save['isin'] = isin
-            df_to_save.reset_index(inplace=True)
-            df_to_save.rename(columns={'index': 'date', 'Close': 'close'}, inplace=True)
-            df_to_save[['isin', 'date', 'close']].to_sql(
-                'prices', conn, if_exists='append', index=False
+        # By default keep already-stored closes and only add new dates; --force
+        # overwrites existing rows with the freshly fetched values.
+        on_conflict = (
+            "DO UPDATE SET close = excluded.close" if self.force_refresh else "DO NOTHING"
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.executemany(
+                "INSERT INTO prices (isin, date, close) VALUES (?, ?, ?) "
+                f"ON CONFLICT(isin, date) {on_conflict}",
+                rows,
             )
             conn.commit()
 
