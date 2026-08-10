@@ -343,8 +343,8 @@ class DataExtractor:
             xid = get_xid(ticker)
             df = get_historical_prices(
                 xid,
-                self.start_date.strftime("%Y%m%d"),
-                self.end_date.strftime("%Y%m%d")
+                self.start_date.strftime("%d%m%Y"),
+                self.end_date.strftime("%d%m%Y")
             )
             
             if df is not None and not df.empty:
@@ -352,9 +352,16 @@ class DataExtractor:
                 df['Date'] = pd.to_datetime(df['Date'])
                 df = df.set_index('Date')
                 return df[['Close']]
-        except Exception as e:
+        except ValueError as e:
+            # get_xid raises this for a ticker that isn't on FT Markets; fall
+            # back to yfinance rather than aborting. Other ValueErrors propagate.
+            if "No data found" not in str(e):
+                raise
+            logger.info(f"ftgo has no data for {ticker}, falling back")
+        except requests.RequestException as e:
             error_str = str(e)
-            if '429' in error_str or 'rate limit' in error_str.lower():
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status == 429 or '429' in error_str or 'rate limit' in error_str.lower():
                 self._ftgo_throttled = True
                 wait_match = re.search(r'wait\s+(\d+)\s*(?:second|minute)', error_str, re.IGNORECASE)
                 if wait_match:
@@ -364,6 +371,8 @@ class DataExtractor:
                     wait_seconds = 60
                 self._ftgo_wait_until = datetime.now() + timedelta(seconds=wait_seconds)
                 logger.warning(f"ftgo rate limited. Waiting {wait_seconds}s")
+            else:
+                logger.warning(f"ftgo request failed for {ticker}: {e}")
         return None
     
     def _fetch_yfinance(self, ticker: str) -> Optional[pd.DataFrame]:
