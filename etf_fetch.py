@@ -69,10 +69,12 @@ class DataExtractor:
         self._init_database()
 
     @staticmethod
-    def _summary(isin: str, name: str, source: str, df: pd.DataFrame) -> str:
-        """One-line result: ISIN, name, source, count and covered date range."""
+    def _summary(isin: str, name: str, source: str, df: pd.DataFrame,
+                 ticker: str = None) -> str:
+        """One-line result: ISIN, name, ticker, count, source and date range."""
         span = f"{df.index.min():%Y-%m-%d} to {df.index.max():%Y-%m-%d}"
-        return f"✓ {isin} {name} — {len(df)} trading days via {source} ({span})"
+        tag = f" ({ticker})" if ticker else ""
+        return f"{isin} {name}{tag} — {len(df)} days - {source} - {span}"
 
     def _load_universe(self) -> Dict[str, ETFDefinition]:
         """Load ETF universe from config."""
@@ -244,14 +246,14 @@ class DataExtractor:
                 df = self._fetch_ftgo(ticker)
                 if df is not None and not df.empty:
                     self._save_prices(isin, df)
-                    logger.info(self._summary(isin, etf.name, f"ftgo ({ticker})", df))
+                    logger.info(self._summary(isin, etf.name, "ftgo", df, ticker))
                     data_dict[isin] = df['Close']
                     break
 
                 df = self._fetch_yfinance(ticker)
                 if df is not None and not df.empty:
                     self._save_prices(isin, df)
-                    logger.info(self._summary(isin, etf.name, f"yfinance ({ticker})", df))
+                    logger.info(self._summary(isin, etf.name, "yfinance", df, ticker))
                     data_dict[isin] = df['Close']
                     break
 
