@@ -199,6 +199,25 @@ USD line), falling back to the first match. The choice is recorded in
 **Does HRP favour low-volatility assets?**
 Not directly — that's Risk Parity (a different method). HRP operates on *clusters*, not individual assets. At each split in the dendrogram it divides the budget between two branches inversely proportional to each branch's variance: the higher-variance branch gets less. Within a branch, an asset with higher vol than its peers gets a smaller slice of that branch's budget. The net effect is that HRP rewards **diversification value** — an asset that is lowly correlated with everything else gets its own branch and therefore a full share of the budget regardless of its own volatility. A highly correlated, high-vol pair share a branch and together receive less. So the driver is correlation structure first, volatility second.
 
+*Worked example* — three assets: IWDA (vol 16%), CSPX (vol 16%), EMIM (vol 20%). IWDA and CSPX are 97% correlated, so the dendrogram merges them first. The tree has two branches: **{IWDA, CSPX}** and **{EMIM}**.
+
+Step 1 — branch variances. Within {IWDA, CSPX}, equal inverse-variance weights give each 50%; the branch variance works out to ~0.025 (vol ≈ 15.9%) because the 0.97 correlation means the two funds move almost in lockstep. {EMIM} is a single asset: variance = 0.20² = 0.040.
+
+Step 2 — split the total budget between branches, inversely to variance:
+
+```
+budget {IWDA, CSPX} = 0.040 / (0.025 + 0.040) = 62%
+budget {EMIM}        = 0.025 / (0.025 + 0.040) = 38%
+```
+
+Step 3 — split the 62% within {IWDA, CSPX} equally (same vol → same inverse-variance weight):
+
+```
+IWDA  31%   CSPX  31%   EMIM  38%
+```
+
+EMIM receives **38% despite having the highest individual volatility (20% vs 16%)**. It earns that budget because it sits in its own branch — its low correlation with the equity pair makes it a genuine diversifier. The {IWDA + CSPX} branch, despite each fund being only 16% vol, has *combined* variance almost as high as EMIM's alone because the two funds are nearly perfectly correlated and provide no diversification to each other.
+
 **Can I mix currencies across ETFs in the analysis?**
 Not meaningfully. Per-asset daily returns are currency-invariant, but a
 covariance/HRP across assets is only coherent if every series is in the same
