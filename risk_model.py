@@ -417,6 +417,11 @@ class HRPRiskModel(RiskModel):
     def linkage_matrix(self) -> np.ndarray:
         """Return hierarchical linkage matrix for dendrogram analysis."""
         return self._linkage_matrix
+
+    @property
+    def leaf_order(self) -> List[str]:
+        """Assets in dendrogram leaf order (for quasi-diagonalization)."""
+        return list(self._leaf_order)
     
     @property
     def cluster_covariances(self) -> Dict[int, pd.DataFrame]:

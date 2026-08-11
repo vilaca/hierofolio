@@ -140,7 +140,7 @@ def read_names(config_path: str = DEFAULT_CONFIG) -> dict:
 def hrp_weights(risk_model: HRPRiskModel, verbose: bool = False) -> pd.Series:
     """HRP weights via inverse-variance recursive bisection on the dendrogram."""
     cov = risk_model.covariance()
-    assets = risk_model._leaf_order  # dendrogram-ordered for quasi-diagonalization
+    assets = risk_model.leaf_order  # dendrogram-ordered for quasi-diagonalization
 
     def cluster_var(cluster):
         sub = cov.loc[cluster, cluster].values
