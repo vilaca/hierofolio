@@ -28,7 +28,7 @@ zero edits.
 
 ## What Phase 0/1 already gives you (real, implemented)
 
-- **`Allocator` protocol** (`src/hierofolio/allocators.py:125`):
+- **`Allocator` protocol** (`src/hfolio/allocators.py:125`):
   `allocate(risk_model, signal=None, current_weights=None, **params) -> pd.Series`.
 - **Bisection reference to mirror** — `HRPAllocator.allocate`
   (`allocators.py:135`): walks `risk_model.leaf_order`, splits each ordered

@@ -19,9 +19,9 @@ document.
 
 ## Guiding constraint (read first)
 
-`hrp_weights()` (`src/hierofolio/analyze.py:163`), `run_backtest()`
+`hrp_weights()` (`src/hfolio/analyze.py:163`), `run_backtest()`
 (`analyze.py:245`), and the `PortfolioOptimizer` classes in
-`src/hierofolio/risk_model.py` all have tests pinning their current behavior
+`src/hfolio/risk_model.py` all have tests pinning their current behavior
 (`tests/test_allocator.py`, `tests/test_riskmodel.py`).
 
 **No step may change an existing public signature.** New abstractions wrap the
@@ -46,7 +46,7 @@ extracts the hardcoded alpha signal into a pluggable `SignalModel`.
 
 ## Step 0a — Signal models
 
-**New file `src/hierofolio/signals.py`:**
+**New file `src/hfolio/signals.py`:**
 
 ```python
 from typing import Optional, Protocol
@@ -79,12 +79,12 @@ is `np.allclose` to the old formula on `make_returns()`.
 
 ## Step 0b — Allocator protocol
 
-**New file `src/hierofolio/allocators.py`:**
+**New file `src/hfolio/allocators.py`:**
 
 ```python
 from typing import Optional, Protocol
 import pandas as pd
-from hierofolio.risk_model import RiskModel
+from hfolio.risk_model import RiskModel
 
 class Allocator(Protocol):
     def allocate(self, risk_model: RiskModel,
@@ -130,7 +130,7 @@ optimizer calls.
 
 ## Step 0c — Walk-forward engine
 
-**New file `src/hierofolio/backtest.py`** with `WalkForwardEngine`,
+**New file `src/hfolio/backtest.py`** with `WalkForwardEngine`,
 parameterized by a risk-model factory, `SignalModel`, `Allocator`, and:
 
 - **Window policy** — `rolling` (current:

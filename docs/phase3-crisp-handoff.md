@@ -32,7 +32,7 @@ leave every other allocator's output identical. Acceptance gate: the
 
 ## What Phases 0–2 already give you (real, implemented)
 
-- **`PortfolioOptimizer` base** (`src/hierofolio/risk_model.py:641`):
+- **`PortfolioOptimizer` base** (`src/hfolio/risk_model.py:641`):
   `__init__(risk_model, alpha, current_weights=None)` validates the alpha index
   and stores `current_weights` (`:648-657`). CRISP subclasses this exactly like
   `ConstrainedMVOOptimizer` and `RobustOptimizer` do.
@@ -209,7 +209,7 @@ Once CRISP is in the registry, the walk-forward engine can compare all six
 methods on the same folds:
 
 ```
-hierofolio analyze backtest --method {hrp,schur-hrp,hrp-sigma-mu,mvo,robust,crisp}
+hfolio analyze backtest --method {hrp,schur-hrp,hrp-sigma-mu,mvo,robust,crisp}
 ```
 
 The meaningful question is not in-sample fit but **out-of-sample Sharpe and
