@@ -1,5 +1,7 @@
+import cvxpy as cp
 import numpy as np
 import pandas as pd
+from matplotlib import pyplot as plt
 from scipy.spatial.distance import squareform
 from scipy.cluster.hierarchy import linkage, fcluster, dendrogram
 from sklearn.covariance import LedoitWolf
@@ -544,8 +546,6 @@ class HRPRiskModel(RiskModel):
     
     def plot_dendrogram(self, **kwargs):
         """Plot dendrogram of the hierarchical clustering."""
-        from matplotlib import pyplot as plt
-        
         fig, ax = plt.subplots(figsize=(12, 6))
         
         # Compute dendrogram with positions
@@ -684,8 +684,6 @@ class ConstrainedMVOOptimizer(PortfolioOptimizer):
         **kwargs
     ) -> pd.Series:
         """Solve constrained mean-variance optimization."""
-        import cvxpy as cp
-        
         n = len(self.alpha)
         assets = self.alpha.index.tolist()
 
@@ -816,8 +814,6 @@ class RobustOptimizer(PortfolioOptimizer):
         Note: Cluster exposure constraints are NOT applied in full mode
         due to overlapping clusters. Use cut() for a partition if needed.
         """
-        import cvxpy as cp
-        
         n = len(self.alpha)
         assets = self.alpha.index.tolist()
 

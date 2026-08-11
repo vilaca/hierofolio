@@ -10,6 +10,7 @@ import os
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 
 from etf_analyze import quality_report, read_long, currency_warning
 
@@ -86,7 +87,6 @@ def test_detects_large_gap():
 # --------------------------------------------------------------------------
 
 def _write_meta(path, mapping):
-    import yaml
     path.write_text(yaml.dump({isin: {"currency": c} for isin, c in mapping.items()}))
 
 

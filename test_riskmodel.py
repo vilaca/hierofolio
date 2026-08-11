@@ -1,8 +1,6 @@
-"""Unit tests for risk_model.py (HRPRiskModel and the portfolio optimizers).
+"""Unit tests for risk_model.py (HRPRiskModel and the portfolio optimizers)."""
 
-Optimizer tests are skipped automatically if cvxpy is not installed.
-"""
-
+import cvxpy as cp
 import numpy as np
 import pandas as pd
 import pytest
@@ -309,8 +307,6 @@ def test_project_to_psd_clips_negative_eigenvalues():
 # ---------------------------------------------------------------------------
 # Optimizers (require cvxpy)
 # ---------------------------------------------------------------------------
-
-cp = pytest.importorskip("cvxpy", reason="cvxpy not installed")
 
 
 @pytest.fixture
