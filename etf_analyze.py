@@ -44,6 +44,46 @@ def read_returns(db_path: str, isin: str = None) -> pd.DataFrame:
     return read_prices(db_path, isin).pct_change().dropna()
 
 
+def quality_report(prices: pd.DataFrame) -> dict:
+    """Data-quality metrics for a long (isin, date, close) price frame.
+
+    Returns raw counts/maxima so callers decide what's acceptable:
+    duplicate keys, null/non-positive closes, weekend rows, the largest
+    per-ISIN calendar gap (days), and the largest absolute daily return.
+    """
+    p = prices.copy()
+    p['date'] = pd.to_datetime(p['date'])
+    p = p.sort_values(['isin', 'date'])
+
+    def _max_gap(dates: pd.Series) -> int:
+        gaps = dates.diff().dt.days.dropna()
+        return int(gaps.max()) if len(gaps) else 0
+
+    def _max_abs_return(close: pd.Series) -> float:
+        rets = close.pct_change().abs().dropna()
+        return float(rets.max()) if len(rets) else 0.0
+
+    gaps = p.groupby('isin')['date'].apply(_max_gap)
+    rets = p.groupby('isin')['close'].apply(_max_abs_return)
+    return {
+        'rows': int(len(p)),
+        'duplicates': int(p.duplicated(subset=['isin', 'date']).sum()),
+        'nulls': int(p['close'].isna().sum()),
+        'non_positive': int((p['close'] <= 0).sum()),
+        'weekend_rows': int((p['date'].dt.weekday >= 5).sum()),
+        'max_gap_days': int(gaps.max()) if len(gaps) else 0,
+        'max_abs_return': float(rets.max()) if len(rets) else 0.0,
+    }
+
+
+def read_long(db_path: str) -> pd.DataFrame:
+    """Full price table in long (isin, date, close) form."""
+    with sqlite3.connect(db_path) as conn:
+        return pd.read_sql_query(
+            "SELECT isin, date, close FROM prices", conn, parse_dates=['date']
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="etf_analyze",
