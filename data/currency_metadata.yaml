@@ -18,22 +18,10 @@ FR0010261198:
   currency: EUR
   symbol: MEU:PAR:EUR
   xid: '3919732'
-FR0010510800:
-  currency: EUR
-  symbol: CSH:PAR:EUR
-  xid: '8723113'
 FR0010717116:
   currency: LSE
   symbol: FAR:LSE
   xid: '524109506'
-IE0003XJA0J9:
-  currency: MUN
-  symbol: WEBN:MUN
-  xid: '894306203'
-IE0006WW1TQ4:
-  currency: USD
-  symbol: EXUS:LSE:USD
-  xid: '871828461'
 IE0008471009:
   currency: EUR
   symbol: EUEA:AEX:EUR
@@ -202,10 +190,6 @@ IE00B9M6RS56:
   currency: EUR
   symbol: EMBE:LSE:EUR
   xid: '59527107'
-IE00BD4TXV59:
-  currency: USD
-  symbol: WRDB:LSE:USD
-  xid: '1047759133'
 IE00BD6FTQ80:
   currency: USD
   symbol: CMOD:LSE:USD
@@ -242,10 +226,6 @@ IE00BG13YH41:
   currency: EUR
   symbol: IEDL:LSE:EUR
   xid: '456651999'
-IE00BGSF1X88:
-  currency: USD
-  symbol: IB01:LSE:USD
-  xid: '518909489'
 IE00BHZPJ890:
   currency: USD
   symbol: EEDS:LSE:USD
@@ -310,10 +290,6 @@ LU0274211217:
   currency: EUR
   symbol: XESX:GER:EUR
   xid: '6107313'
-LU0290358497:
-  currency: EUR
-  symbol: XEON:GER:EUR
-  xid: '7140105'
 LU0292104469:
   currency: EUR
   symbol: XS8R:GER:EUR
@@ -346,18 +322,6 @@ LU0908508731:
   currency: GBX
   symbol: XG7S:LSE:GBX
   xid: '68946267'
-LU0950668870:
-  currency: EUR
-  symbol: 0DZP:LSE:EUR
-  xid: '447857690'
-LU1107559376:
-  currency: EUR
-  symbol: EMUUKD:SWX:EUR
-  xid: '79425512'
-LU1107559616:
-  currency: JPY
-  symbol: JPNUKD:SWX:JPY
-  xid: '79425513'
 LU1437015735:
   currency: EUR
   symbol: CEU2:PAR:EUR

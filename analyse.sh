@@ -1,21 +1,14 @@
 #!/usr/bin/env bash
-# Portfolio analysis — 25 of 28 ETFs; excludes short-history funds (< 3 years)
-# so the common return window goes back to Oct 2019 rather than 2024.
-#
-# Short-history funds excluded:
-#   IE0006WW1TQ4  X MSCI WORLD EX USA 1C      (from Mar 2024)
-#   IE0003XJA0J9  AMUNDI PRME ALL CTRY WLD ACC (from Jun 2024)
-#   IE000YYE6WK5  VANECK DEFENSE ETF           (from Apr 2023)
-
-EXCLUDE="--exclude IE0006WW1TQ4 IE0003XJA0J9 IE000YYE6WK5"
+# Portfolio analysis — all 93 ETFs (validated clean: >= 3yr history, no sparse
+# data, no cash-like instruments). Run `hierofolio config validate` to recheck.
 
 echo "=== Summary (correlations + annualised stats) ==="
-uv run python -m hierofolio.analyze summary $EXCLUDE
+uv run python -m hierofolio.analyze summary
 
 echo ""
 echo "=== HRP (risk-balanced) ==="
-uv run python -m hierofolio.analyze allocate --method hrp $EXCLUDE
+uv run python -m hierofolio.analyze allocate --method hrp
 
 echo ""
 echo "=== CRISP γ=0.5 (signal-following, anti-redundancy) ==="
-uv run python -m hierofolio.analyze allocate --method crisp --corr-penalty 0.5 $EXCLUDE
+uv run python -m hierofolio.analyze allocate --method crisp --corr-penalty 0.5
