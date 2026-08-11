@@ -8,6 +8,7 @@ Usage:
     ./etf_analyze.py allocate             # HRP portfolio weights
     ./etf_analyze.py allocate --method mvo    # MVO weights
     ./etf_analyze.py allocate --method robust # Robust weights
+    ./etf_analyze.py backtest             # rolling-window out-of-sample backtest
 
 Reads the SQLite DB populated by etf_fetch.py; run that first.
 """
@@ -161,6 +162,79 @@ def portfolio_stats(weights: pd.Series, returns: pd.DataFrame) -> dict:
     return {"Ann Return": ann_return, "Ann Vol": ann_vol, "Sharpe": sharpe}
 
 
+def run_backtest(
+    returns: pd.DataFrame,
+    method: str,
+    window_years: int = 3,
+    step_months: int = 3,
+    max_weight: float = None,
+    risk_aversion: float = 1.0,
+    robustness_penalty: float = 1.0,
+) -> tuple:
+    """Rolling-window backtest. Returns (out-of-sample daily returns, rebalance log)."""
+    idx = returns.index
+
+    # Generate rebalance dates by stepping forward from the first full window
+    d = idx[0] + pd.DateOffset(years=window_years)
+    rebalance_dates = []
+    while d <= idx[-1]:
+        prior = idx[idx <= d]
+        if len(prior):
+            rebalance_dates.append(prior[-1])
+        d += pd.DateOffset(months=step_months)
+
+    if not rebalance_dates:
+        raise ValueError(
+            f"Not enough data for a {window_years}-year window "
+            f"(available: {(idx[-1] - idx[0]).days / 365:.1f} years)."
+        )
+
+    oos_segments = []
+    log = []
+
+    for i, rebal_date in enumerate(rebalance_dates):
+        train_start = rebal_date - pd.DateOffset(years=window_years)
+        train = returns.loc[train_start:rebal_date]
+        if len(train) < 60:
+            continue
+
+        risk_model = HRPRiskModel(
+            returns=train,
+            shrinkage_method="constant_correlation",
+            shrinkage_intensity=0.3,
+            cluster_mode="full",
+            linkage_method="ward",
+        )
+
+        if method == 'hrp':
+            weights = hrp_weights(risk_model)
+        else:
+            alpha = (1 + train.mean()) ** 252 - 1
+            if method == 'mvo':
+                optimizer = ConstrainedMVOOptimizer(
+                    risk_model=risk_model, alpha=alpha, risk_aversion=risk_aversion,
+                )
+            else:
+                optimizer = RobustOptimizer(
+                    risk_model=risk_model, alpha=alpha, risk_aversion=risk_aversion,
+                    robustness_penalty=robustness_penalty,
+                )
+            weights = optimizer.solve(max_weight=max_weight)
+
+        next_rebal = rebalance_dates[i + 1] if i + 1 < len(rebalance_dates) else idx[-1]
+        hold = returns.loc[rebal_date:next_rebal].iloc[1:]  # exclude rebal_date itself
+        if hold.empty:
+            continue
+
+        oos_segments.append(hold @ weights.reindex(hold.columns).fillna(0))
+        log.append({'date': rebal_date.date(), 'n_train': len(train), 'weights': weights})
+
+    if not oos_segments:
+        raise ValueError("No out-of-sample periods were generated.")
+
+    return pd.concat(oos_segments), log
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="etf_analyze",
@@ -181,6 +255,10 @@ Examples:
   ./etf_analyze.py allocate
   ./etf_analyze.py allocate --method mvo
   ./etf_analyze.py allocate --method robust --max-weight 0.5
+
+  # Rolling-window out-of-sample backtest (3-year window, quarterly rebalance)
+  ./etf_analyze.py backtest
+  ./etf_analyze.py backtest --method mvo --window 5 --step 6
         """
     )
 
@@ -212,6 +290,18 @@ Examples:
         '--robustness-penalty', type=float, default=1.0, metavar='ρ',
         help='Robustness penalty for robust method (default: 1.0; try 10–100 to see diversification)'
     )
+
+    backtest_parser = subparsers.add_parser('backtest', help='Rolling-window out-of-sample backtest')
+    backtest_parser.add_argument('--method', choices=['hrp', 'mvo', 'robust'], default='hrp',
+                                 help='Optimization method (default: hrp)')
+    backtest_parser.add_argument('--window', type=int, default=3, metavar='YEARS',
+                                 help='Training window in years (default: 3)')
+    backtest_parser.add_argument('--step', type=int, default=3, metavar='MONTHS',
+                                 help='Rebalance interval in months (default: 3)')
+    backtest_parser.add_argument('--max-weight', type=float, default=None, metavar='W',
+                                 help='Max weight per asset for mvo/robust')
+    backtest_parser.add_argument('--risk-aversion', type=float, default=1.0, metavar='λ')
+    backtest_parser.add_argument('--robustness-penalty', type=float, default=1.0, metavar='ρ')
 
     args = parser.parse_args()
 
@@ -337,6 +427,61 @@ Examples:
             print(f"  Ann Return  {stats['Ann Return']:8.2%}")
             print(f"  Ann Vol     {stats['Ann Vol']:8.2%}")
             print(f"  Sharpe      {stats['Sharpe']:8.4f}")
+        except Exception as e:
+            print(f"✗ Error: {e}")
+            return 1
+        return 0
+
+    if args.command == 'backtest':
+        try:
+            returns = read_returns(args.db)
+            if returns.empty:
+                print("No returns data. Run: ./etf_fetch.py")
+                return 1
+
+            warning = currency_warning(returns.columns, args.currency_meta)
+            if warning:
+                print(f"⚠ {warning}")
+
+            oos_returns, log = run_backtest(
+                returns=returns,
+                method=args.method,
+                window_years=args.window,
+                step_months=args.step,
+                max_weight=args.max_weight,
+                risk_aversion=args.risk_aversion,
+                robustness_penalty=args.robustness_penalty,
+            )
+
+            names = read_names(DEFAULT_CONFIG)
+            isins = returns.columns.tolist()
+
+            print("\n" + "=" * 70)
+            print(f"Hierofolio Backtest — {args.method.upper()}")
+            print(f"Window: {args.window}y  Step: {args.step}m  Periods: {len(log)}")
+            print("=" * 70)
+
+            # Rebalance log as an aligned table
+            weight_rows = {entry['date']: entry['weights'].reindex(isins) for entry in log}
+            weight_df = pd.DataFrame(weight_rows).T
+            weight_df.index.name = 'Rebalance'
+            weight_df.columns = [names.get(c, c) for c in weight_df.columns]
+            print("\nRebalance Log:")
+            print(weight_df.map(lambda x: f"{x:.1%}").to_string())
+
+            # Out-of-sample stats
+            ann_vol = float(oos_returns.std(ddof=1) * np.sqrt(252))
+            ann_return = float((1 + oos_returns).prod() ** (252 / len(oos_returns)) - 1)
+            sharpe = ann_return / ann_vol if ann_vol > 0 else float("nan")
+            equity = (1 + oos_returns).cumprod()
+            max_dd = float(((equity - equity.cummax()) / equity.cummax()).min())
+            start, end = oos_returns.index[0].date(), oos_returns.index[-1].date()
+
+            print(f"\nOut-of-Sample Statistics ({start} → {end}):")
+            print(f"  Ann Return   {ann_return:8.2%}")
+            print(f"  Ann Vol      {ann_vol:8.2%}")
+            print(f"  Sharpe       {sharpe:8.4f}")
+            print(f"  Max Drawdown {max_dd:8.2%}")
         except Exception as e:
             print(f"✗ Error: {e}")
             return 1
