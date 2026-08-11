@@ -165,6 +165,14 @@ def hrp_weights(risk_model: HRPRiskModel, verbose: bool = False) -> pd.Series:
     return weights / weights.sum()
 
 
+def sri_class(ann_vol: float) -> int:
+    """EU PRIIP Summary Risk Indicator (1–7) from annualised volatility."""
+    for cls, threshold in enumerate([0.005, 0.05, 0.12, 0.20, 0.30, 0.80], start=1):
+        if ann_vol < threshold:
+            return cls
+    return 7
+
+
 def portfolio_stats(weights: pd.Series, returns: pd.DataFrame) -> dict:
     """Annualized return, vol, and Sharpe for a set of weights."""
     w = weights.reindex(returns.columns).fillna(0).values
@@ -446,6 +454,7 @@ Examples:
             print(f"  Ann Return  {stats['Ann Return']:8.2%}")
             print(f"  Ann Vol     {stats['Ann Vol']:8.2%}")
             print(f"  Sharpe      {stats['Sharpe']:8.4f}")
+            print(f"  SRI         {sri_class(stats['Ann Vol']):>8}/7  (EU PRIIP risk class)")
         except Exception as e:
             print(f"✗ Error: {e}")
             return 1
