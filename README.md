@@ -20,7 +20,7 @@ The tooling is three small scripts around a shared config/DB:
 
 1. **`etf_config.py`** — build the ETF universe YAML from ISINs (via OpenFIGI).
 2. **`etf_fetch.py`** — populate the SQLite price DB (ftgo, with a yfinance fallback).
-3. **`etf_analyze.py`** — returns and summary statistics from the DB.
+3. **`etf_analyze.py`** — returns, summary statistics, portfolio weights, and backtesting.
 
 ```bash
 # 1. Add ETFs by ISIN (auto-resolves name, tickers, exchange, FIGI)
@@ -38,12 +38,54 @@ The tooling is three small scripts around a shared config/DB:
 ./etf_analyze.py returns              # returns for all ETFs
 ./etf_analyze.py returns IE00BM67HK77 # returns for a single ISIN
 ./etf_analyze.py summary              # annualized stats + correlation
+
+# 4. Compute portfolio weights
+./etf_analyze.py allocate                                  # HRP (default)
+./etf_analyze.py allocate --method mvo                     # Mean-Variance
+./etf_analyze.py allocate --method robust                  # Robust MVO
+./etf_analyze.py allocate --method mvo --max-weight 0.5    # cap 50% per ETF
+./etf_analyze.py allocate --method robust --robustness-penalty 50  # stronger diversification
+
+# 5. Rolling-window out-of-sample backtest
+./etf_analyze.py backtest                                  # HRP, 3y window, quarterly
+./etf_analyze.py backtest --method mvo --max-weight 0.5
+./etf_analyze.py backtest --window 5 --step 6             # 5y window, semi-annual
 ```
 
 Defaults: config `etf_universe.yaml`, database `hierofolio.db`, start date
 `2000-01-01` (earlier than any UCITS ETF, so the first fetch returns each
 ETF's full history from inception). Override with `--config`, `--db`, and
 `--start` (see each script's `--help`).
+
+## Allocator
+
+`etf_analyze.py allocate` feeds the stored returns into one of three optimizers and prints the resulting weights plus in-sample portfolio statistics:
+
+| Method | What it does |
+|--------|-------------|
+| `hrp` | Hierarchical Risk Parity — splits money down the clustering tree inversely to cluster variance. No return forecast needed. |
+| `mvo` | Mean-Variance Optimization — maximises return minus risk, using historical returns as the signal. Concentrates without `--max-weight`. |
+| `robust` | Robust MVO — like MVO but penalises uncertainty in the return forecast, spreading weights away from concentrated positions. Tune with `--robustness-penalty` (try 10–100). |
+
+Key flags (all optional):
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `--max-weight W` | none | Cap any single ETF at W (e.g. `0.5`). Essential for MVO/Robust to avoid full concentration. |
+| `--risk-aversion λ` | 1.0 | Higher → more risk-averse; shifts MVO/Robust toward lower-vol allocations. |
+| `--robustness-penalty ρ` | 1.0 | Robust only. Higher → more diversification regardless of the alpha signal. |
+
+## Backtest
+
+`etf_analyze.py backtest` runs a rolling-window out-of-sample evaluation: it fits the optimizer on a trailing window of returns, records what the *next* period actually returned (the optimizer never sees this), and repeats at each rebalance date. The result is an honest equity curve — no look-ahead bias.
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `--window YEARS` | 3 | Length of the training window in years. |
+| `--step MONTHS` | 3 | Rebalance frequency in months (3 = quarterly). |
+| `--method` | hrp | Same methods and flags as `allocate`. |
+
+Output includes a per-period rebalance log (so you can see how weights evolved) and overall out-of-sample annualised return, vol, Sharpe, and max drawdown.
 
 ## Risk model
 
