@@ -314,6 +314,65 @@ hierofolio analyze backtest --method crisp --corr-penalty 0.3 --turnover-penalty
 
 ---
 
+### What to expect from CRISP (validation on the built-in 3-ETF universe)
+
+The following numbers come from a 3y-window / 6m-step backtest on the three
+ETFs in `data/hierofolio.db` (MSCI World, S&P 500, EM IMI), 2017–2026.
+
+**Method comparison:**
+
+| Method | OOS Sharpe | Ann Return | Ann Vol | Notes |
+|--------|-----------|------------|---------|-------|
+| HRP | 0.704 | 11.66% | 16.55% | ~equal-weight risk parity |
+| Schur-HRP | 0.704 | 11.66% | 16.55% | identical to HRP (3-asset tree degenerates) |
+| HRP-Σμ | 0.710 | 11.74% | 16.53% | marginal tilt toward best-μ branch |
+| MVO | 0.814 | 13.90% | 17.06% | **100% S&P 500 every fold** — classic MVO concentration |
+| Robust | 0.814 | 13.90% | 17.06% | identical to MVO here |
+| **CRISP γ=0.3** | **0.778** | **13.10%** | **16.83%** | diverse, meaningful signal-following |
+
+Equal-weight benchmark: Sharpe 0.726 / 11.94% / 16.45%.
+
+**γ sweep for CRISP:**
+
+| γ | Sharpe | Ann Return | Ann Vol |
+|---|--------|------------|---------|
+| 0.0 (= MVO) | 0.814 | 13.90% | 17.06% |
+| 0.1 | 0.811 | — | — |
+| 0.2 | 0.803 | 13.63% | 16.99% |
+| 0.3 (default) | 0.778 | 13.10% | 16.83% |
+| 0.5 | 0.746 | 12.49% | 16.74% |
+| 1.0 | 0.717 | 12.02% | 16.76% |
+
+**Key takeaways:**
+
+- **MVO collapsed to 100% S&P 500** on this universe. MSCI World and S&P 500
+  are 97% correlated, so MVO treated them as the same bet, ignored MSCI World,
+  and went all-in on whichever dominated historically. On the final fold it
+  flipped to 100% EM — a noise-driven reversal that illustrates the fragility.
+
+- **CRISP broke the concentration without a hard cap.** The correlation penalty
+  makes doubling up on near-identical ETFs expensive in the objective, so MSCI
+  World dropped to 0% naturally (it adds no independent exposure) and the budget
+  spread between S&P 500 and EM — a genuine economic difference.
+
+- **Sweet spot is γ ≈ 0.1–0.2** for this universe — lighter than the default
+  0.3. You give up less than 1 Sharpe point vs MVO but break the single-asset
+  concentration. The right value is universe-specific; always confirm with a
+  backtest sweep.
+
+- **Weight stability:** HRP is the most stable (slow drift, never flips). CRISP
+  is meaningfully more stable than raw MVO but still moves with the signal. HRP
+  is the right choice when stability is the primary goal; CRISP when you want
+  signal-following without the concentration risk.
+
+- **3-ETF limitation.** These numbers are from a minimal universe with two
+  near-identical developed-market funds — a stress test for concentration, not a
+  representative evaluation. Schur-HRP is identical to HRP because a 3-asset
+  bisection leaves no cross-block structure. A 10–20 ETF universe with genuine
+  sector and geographic dispersion will differentiate the methods much more.
+
+---
+
 ### Find the right signal strength (τ) for your ETF universe
 
 ```bash
