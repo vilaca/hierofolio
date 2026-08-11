@@ -39,6 +39,9 @@ Examples:
 
   # Refresh an ETF's metadata from OpenFIGI
   hierofolio config update IE00BM67HK77
+
+  # Check history, data quality, and get suggested --exclude flags
+  hierofolio config validate
         """
     )
 
@@ -54,6 +57,15 @@ Examples:
     update_parser = subparsers.add_parser('update', help='Update ETF metadata')
     update_parser.add_argument('isin', help='ISIN to update')
 
+    remove_parser = subparsers.add_parser(
+        'remove',
+        help='Delete one or more ISINs from config, DB, and currency metadata',
+    )
+    remove_parser.add_argument('isins', nargs='+', help='ISINs to remove')
+    remove_parser.add_argument('--db', default=DEFAULT_DB, help='SQLite DB path')
+    remove_parser.add_argument('--currency-meta', default=DEFAULT_CURRENCY_META,
+                               help='Currency metadata YAML path')
+
     trim_parser = subparsers.add_parser(
         'trim',
         help='Remove ISINs not present in both config and DB (keeps intersection)',
@@ -61,6 +73,18 @@ Examples:
     trim_parser.add_argument('--db', default=DEFAULT_DB, help='SQLite DB path')
     trim_parser.add_argument('--currency-meta', default=DEFAULT_CURRENCY_META,
                              help='Currency metadata YAML path')
+
+    validate_parser = subparsers.add_parser(
+        'validate',
+        help='Check history, data quality, and suggest --exclude flags',
+    )
+    validate_parser.add_argument('--db', default=DEFAULT_DB, help='SQLite DB path')
+    validate_parser.add_argument('--min-years', type=float, default=3.0,
+                                 help='Minimum history in years (default: 3)')
+    validate_parser.add_argument('--min-fill', type=float, default=0.6,
+                                 help='Minimum data fill rate 0–1 (default: 0.6)')
+    validate_parser.add_argument('--max-vol', type=float, default=0.02,
+                                 help='Ann vol below this flags as cash-like (default: 0.02)')
 
     args = parser.parse_args(argv)
 
@@ -102,6 +126,42 @@ Examples:
         config = ConfigManager(args.config)
         success = config.update(args.isin)
         return 0 if success else 1
+
+    if args.command == 'remove':
+        cm = ConfigManager(args.config)
+
+        try:
+            with open(args.currency_meta) as f:
+                curr_meta = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            curr_meta = {}
+
+        for isin in args.isins:
+            removed_any = False
+
+            if isin in cm.config.get('etfs', {}):
+                del cm.config['etfs'][isin]
+                removed_any = True
+                print(f"{isin}: removed from config")
+
+            if isin in curr_meta:
+                del curr_meta[isin]
+                removed_any = True
+                print(f"{isin}: removed from currency metadata")
+
+            with sqlite3.connect(args.db) as conn:
+                n = conn.execute("DELETE FROM prices WHERE isin = ?", (isin,)).rowcount
+            if n:
+                removed_any = True
+                print(f"{isin}: removed {n} rows from DB")
+
+            if not removed_any:
+                print(f"{isin}: not found in any file")
+
+        cm._save_config()
+        with open(args.currency_meta, 'w') as f:
+            yaml.dump(curr_meta, f, default_flow_style=False, sort_keys=True)
+        return 0
 
     if args.command == 'trim':
         cm = ConfigManager(args.config)
@@ -148,6 +208,112 @@ Examples:
             yaml.dump(curr_trimmed, f, default_flow_style=False, sort_keys=True)
 
         print(f"Done — {len(kept)} ISINs kept.")
+        return 0
+
+    if args.command == 'validate':
+        import numpy as np
+        import pandas as pd
+
+        TRADING_YEAR = 252
+
+        cm = ConfigManager(args.config)
+        config_isins = dict(cm.list())
+
+        with sqlite3.connect(args.db) as conn:
+            price_df = pd.read_sql(
+                'SELECT isin, date, close FROM prices ORDER BY isin, date',
+                conn, parse_dates=['date'],
+            )
+
+        db_isins = set(price_df['isin'].unique())
+        config_isin_set = set(config_isins.keys())
+
+        # --- Config vs DB sync ---
+        only_config = sorted(config_isin_set - db_isins)
+        only_db = sorted(db_isins - config_isin_set)
+        print("=== Config vs DB ===")
+        if not only_config and not only_db:
+            print(f"  {len(config_isin_set)} ETFs — config and DB in sync  ✓")
+        else:
+            if only_config:
+                print(f"  In config, missing from DB (run fetch): {', '.join(only_config)}")
+            if only_db:
+                print(f"  In DB, not in config (orphans):         {', '.join(only_db)}")
+
+        # --- Per-ETF stats ---
+        stats = price_df.groupby('isin').agg(
+            first_date=('date', 'min'),
+            last_date=('date', 'max'),
+            n_days=('date', 'count'),
+        ).reset_index()
+        stats['span_days'] = (stats['last_date'] - stats['first_date']).dt.days
+        stats['expected'] = (stats['span_days'] * 5 / 7).clip(lower=1).astype(int)
+        stats['fill_rate'] = stats['n_days'] / stats['expected']
+        stats['years'] = stats['n_days'] / TRADING_YEAR
+
+        wide = price_df.pivot(index='date', columns='isin', values='close')
+        ann_vol = wide.pct_change().std() * np.sqrt(TRADING_YEAR)
+        stats = stats.merge(ann_vol.rename('ann_vol').reset_index(), on='isin', how='left')
+        stats['name'] = stats['isin'].map(
+            lambda x: config_isins.get(x, {}).get('name', 'Unknown')[:35]
+        )
+
+        # --- History breakdown ---
+        print()
+        print("=== History Breakdown ===")
+        tiers = [
+            ('>= 10yr', stats['years'] >= 10),
+            ('5–10yr',  (stats['years'] >= 5) & (stats['years'] < 10)),
+            ('3–5yr',   (stats['years'] >= 3) & (stats['years'] < 5)),
+            ('1–3yr',   (stats['years'] >= 1) & (stats['years'] < 3)),
+            ('< 1yr',   stats['years'] < 1),
+        ]
+        for label, mask in tiers:
+            n = int(mask.sum())
+            if n:
+                print(f"  {label:<10}  {n:>3} ETF{'s' if n != 1 else ''}")
+
+        # --- Issues ---
+        flagged = []
+        short  = stats[stats['n_days'] < TRADING_YEAR * args.min_years].sort_values('n_days')
+        sparse = stats[(stats['fill_rate'] < args.min_fill) &
+                       (stats['n_days'] >= TRADING_YEAR * args.min_years)].sort_values('fill_rate')
+        cash   = stats[(stats['ann_vol'] < args.max_vol) &
+                       (~stats['isin'].isin(short['isin']))].sort_values('ann_vol')
+
+        print()
+        print("=== Issues ===")
+        if not short.empty:
+            print(f"Short history (< {args.min_years:.0f}yr):")
+            for _, r in short.iterrows():
+                print(f"  {r['isin']}  {r['name']:<35}  {int(r['n_days']):>4} days  from {r['first_date'].date()}")
+                flagged.append(r['isin'])
+
+        if not sparse.empty:
+            print(f"Sparse data (fill < {args.min_fill:.0%}):")
+            for _, r in sparse.iterrows():
+                print(f"  {r['isin']}  {r['name']:<35}  {int(r['n_days'])}/{int(r['expected'])} days  ({r['fill_rate']:.0%})")
+                flagged.append(r['isin'])
+
+        if not cash.empty:
+            print(f"Cash-like (ann vol < {args.max_vol:.0%}):")
+            for _, r in cash.iterrows():
+                print(f"  {r['isin']}  {r['name']:<35}  vol {r['ann_vol']:.2%}")
+                flagged.append(r['isin'])
+
+        if not flagged:
+            print("  None — all ETFs look good.")
+
+        # --- Suggested excludes ---
+        exclude = sorted(set(flagged))
+        if exclude:
+            good = stats[~stats['isin'].isin(exclude)]
+            common_start = good['first_date'].max().date()
+            print()
+            print("=== Suggested --exclude ===")
+            print("  --exclude " + ' '.join(exclude))
+            print(f"  {len(good)} ETFs in analysis   common window from {common_start}")
+
         return 0
 
     return 0
