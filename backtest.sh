@@ -2,10 +2,12 @@
 # Out-of-sample method comparison on the long-history ETFs.
 # Reproduces docs/portfolio-backtest-notes.md.
 #
-# Usage: ./backtest.sh [WINDOW_YEARS] [STEP_MONTHS] [BROKER]
-#   WINDOW_YEARS  training window in years   (default 2)
-#   STEP_MONTHS   rebalance interval in months (default 3)
-#   BROKER        optional broker cost profile (e.g. degiro); omit for no costs
+# Usage: ./backtest.sh [WINDOW_YEARS] [STEP_MONTHS] [BROKER] [SHRINKAGE_METHOD] [SHRINKAGE_INTENSITY]
+#   WINDOW_YEARS        training window in years               (default 2)
+#   STEP_MONTHS         rebalance interval in months           (default 3)
+#   BROKER              optional broker cost profile           (e.g. degiro; omit for no costs)
+#   SHRINKAGE_METHOD    ledoit_wolf | constant_correlation | identity  (default constant_correlation)
+#   SHRINKAGE_INTENSITY shrinkage intensity 0-1               (default 0.3; ignored for ledoit_wolf)
 #
 # Short-history funds are excluded so the common window reaches back to 2019:
 #   IE0006WW1TQ4  Xtrackers MSCI World ex-USA     (from Mar 2024)
@@ -17,6 +19,8 @@ set -euo pipefail
 WINDOW="${1:-2}"
 STEP="${2:-3}"
 BROKER="${3:-}"
+SHRINKAGE_METHOD="${4:-constant_correlation}"
+SHRINKAGE_INTENSITY="${5:-0.3}"
 
 # NOTE: pass these as separate words (argparse nargs='+'), never as one
 # unquoted variable — zsh/bash split differently and it breaks parsing.
@@ -29,9 +33,15 @@ if [[ -n "$BROKER" ]]; then
   COST_LABEL="$BROKER costs, €10k"
 fi
 
+SHRINKAGE_ARGS=(--shrinkage-method "$SHRINKAGE_METHOD")
+if [[ "$SHRINKAGE_METHOD" != "ledoit_wolf" ]]; then
+  SHRINKAGE_ARGS+=(--shrinkage-intensity "$SHRINKAGE_INTENSITY")
+fi
+
 run() {  # run <method-and-flags...> ; echoes the OOS stats block
   uv run python -m hierofolio.analyze backtest "$@" \
-    "${EXCLUDE[@]}" --window "$WINDOW" --step "$STEP" "${COST_ARGS[@]}" 2>&1 \
+    "${EXCLUDE[@]}" --window "$WINDOW" --step "$STEP" "${COST_ARGS[@]}" \
+    "${SHRINKAGE_ARGS[@]}" 2>&1 \
     | sed -n '/Out-of-Sample Statistics/,$p'
 }
 
@@ -46,7 +56,7 @@ stat() {  # stat <name> <method-and-flags...>
     "$(awk '/Max Drawdown/{print $3}' <<<"$block")"
 }
 
-echo "OOS method comparison — window ${WINDOW}y, step ${STEP}m, ${COST_LABEL}"
+echo "OOS method comparison — window ${WINDOW}y, step ${STEP}m, ${COST_LABEL}, shrinkage=${SHRINKAGE_METHOD}(${SHRINKAGE_INTENSITY})"
 echo "----------------------------------------------------------------------"
 stat "HRP"            --method hrp
 stat "Schur-HRP g0.5" --method schur-hrp --gamma 0.5
