@@ -297,7 +297,11 @@ Examples:
     returns_parser = subparsers.add_parser('returns', help='Show returns DataFrame')
     returns_parser.add_argument('isin', nargs='?', help='ISIN to show (all if omitted)')
 
-    subparsers.add_parser('summary', help='Show data summary')
+    summary_parser = subparsers.add_parser('summary', help='Show data summary')
+    summary_parser.add_argument(
+        '--exclude', nargs='+', default=[], metavar='ISIN',
+        help='ISINs to exclude from the summary (e.g. funds with too little history)'
+    )
 
     allocate_parser = subparsers.add_parser('allocate', help='Compute portfolio weights')
     allocate_parser.add_argument(
@@ -434,7 +438,7 @@ Examples:
 
     if args.command == 'summary':
         try:
-            returns = read_returns(args.db)
+            returns = read_returns(args.db, exclude=args.exclude or None)
             if returns.empty:
                 print("No returns data. Run: ./etf_fetch.py")
                 return 1

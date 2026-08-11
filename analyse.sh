@@ -9,6 +9,10 @@
 
 EXCLUDE="--exclude IE0006WW1TQ4 IE0003XJA0J9 IE000YYE6WK5"
 
+echo "=== Summary (correlations + annualised stats) ==="
+uv run python -m hierofolio.analyze summary $EXCLUDE
+
+echo ""
 echo "=== HRP (risk-balanced) ==="
 uv run python -m hierofolio.analyze allocate --method hrp $EXCLUDE
 
