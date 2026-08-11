@@ -25,6 +25,19 @@ import yaml
 from etf_common import DEFAULT_CONFIG, DEFAULT_CURRENCY_META, DEFAULT_DB
 from risk_model import ConstrainedMVOOptimizer, HRPRiskModel, RobustOptimizer
 
+DEFAULT_BROKER_PROFILES = os.path.join(os.path.dirname(__file__), "broker_profiles.yaml")
+
+
+def load_broker_profiles(path: str = DEFAULT_BROKER_PROFILES) -> dict:
+    """Load broker cost profiles from YAML (flat_eur + bps_per_side per broker)."""
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return yaml.safe_load(f) or {}
+
+
+BROKER_PROFILES = load_broker_profiles()
+
 
 def read_prices(db_path: str, isin: str = None) -> pd.DataFrame:
     """Load a wide (date x isin) close-price frame from the DB."""
@@ -183,6 +196,23 @@ def portfolio_stats(weights: pd.Series, returns: pd.DataFrame) -> dict:
     return {"Ann Return": ann_return, "Ann Vol": ann_vol, "Sharpe": sharpe}
 
 
+def _rebalance_cost(
+    w_old: pd.Series,
+    w_new: pd.Series,
+    portfolio_size_eur: float,
+    flat_fee_eur: float,
+    cost_bps_per_side: float,
+) -> float:
+    """Transaction cost as a fraction of portfolio value for one rebalance."""
+    deltas = (w_new - w_old).abs()
+    traded = deltas[deltas > 1e-4]  # skip dust-level changes
+    cost_eur = sum(
+        flat_fee_eur + cost_bps_per_side / 10_000 * delta * portfolio_size_eur
+        for delta in traded
+    )
+    return cost_eur / portfolio_size_eur
+
+
 def run_backtest(
     returns: pd.DataFrame,
     method: str,
@@ -191,6 +221,9 @@ def run_backtest(
     max_weight: float = None,
     risk_aversion: float = 1.0,
     robustness_penalty: float = 1.0,
+    flat_fee_eur: float = 0.0,
+    cost_bps_per_side: float = 0.0,
+    portfolio_size_eur: float = 10_000.0,
 ) -> tuple:
     """Rolling-window backtest. Returns (out-of-sample daily returns, rebalance log)."""
     idx = returns.index
@@ -213,6 +246,7 @@ def run_backtest(
     oos_segments = []
     ew_segments = []
     log = []
+    prev_weights = None  # tracked to compute per-rebalance turnover
 
     for i, rebal_date in enumerate(rebalance_dates):
         train_start = rebal_date - pd.DateOffset(years=window_years)
@@ -248,9 +282,23 @@ def run_backtest(
         if hold.empty:
             continue
 
-        oos_segments.append(hold @ weights.reindex(hold.columns).fillna(0))
+        period_oos = hold @ weights.reindex(hold.columns).fillna(0)
+
+        # Deduct transaction cost from the first day of the hold period
+        w_old = prev_weights if prev_weights is not None else pd.Series(
+            1 / len(weights), index=weights.index)
+        cost = _rebalance_cost(w_old, weights, portfolio_size_eur, flat_fee_eur, cost_bps_per_side)
+        period_oos.iloc[0] -= cost
+
+        oos_segments.append(period_oos)
         ew_segments.append(hold.mean(axis=1))
-        log.append({'date': rebal_date.date(), 'n_train': len(train), 'weights': weights})
+        log.append({
+            'date': rebal_date.date(),
+            'n_train': len(train),
+            'weights': weights,
+            'cost': cost,
+        })
+        prev_weights = weights
 
     if not oos_segments:
         raise ValueError("No out-of-sample periods were generated.")
@@ -329,6 +377,18 @@ Examples:
                                  help='Max weight per asset for mvo/robust')
     backtest_parser.add_argument('--risk-aversion', type=float, default=1.0, metavar='λ')
     backtest_parser.add_argument('--robustness-penalty', type=float, default=1.0, metavar='ρ')
+    backtest_parser.add_argument(
+        '--broker', choices=list(BROKER_PROFILES), default=None, metavar='BROKER',
+        help=f"Broker cost profile ({', '.join(BROKER_PROFILES)}); see broker_profiles.yaml"
+    )
+    backtest_parser.add_argument(
+        '--portfolio-size', type=float, default=10_000.0, metavar='EUR',
+        help='Portfolio size in EUR for flat-fee cost calculation (default: 10000)'
+    )
+    backtest_parser.add_argument(
+        '--cost-bps', type=float, default=None, metavar='BPS',
+        help='Manual round-trip cost override in bps (overrides --broker)'
+    )
 
     args = parser.parse_args()
 
@@ -471,6 +531,21 @@ Examples:
             if warning:
                 print(f"⚠ {warning}")
 
+            # Resolve cost model: --cost-bps overrides --broker
+            if args.cost_bps is not None:
+                flat_fee_eur = 0.0
+                cost_bps_per_side = args.cost_bps / 2
+                cost_label = f"manual ({args.cost_bps} bps round-trip)"
+            elif args.broker:
+                profile = BROKER_PROFILES[args.broker]
+                flat_fee_eur = profile['flat_eur']
+                cost_bps_per_side = profile['bps_per_side']
+                cost_label = f"{profile['name']} — {profile['note']}"
+            else:
+                flat_fee_eur = 0.0
+                cost_bps_per_side = 0.0
+                cost_label = "none (use --broker or --cost-bps to model transaction costs)"
+
             oos_returns, ew_returns, log = run_backtest(
                 returns=returns,
                 method=args.method,
@@ -479,14 +554,21 @@ Examples:
                 max_weight=args.max_weight,
                 risk_aversion=args.risk_aversion,
                 robustness_penalty=args.robustness_penalty,
+                flat_fee_eur=flat_fee_eur,
+                cost_bps_per_side=cost_bps_per_side,
+                portfolio_size_eur=args.portfolio_size,
             )
 
             names = read_names(DEFAULT_CONFIG)
             isins = returns.columns.tolist()
+            total_cost = sum(e['cost'] for e in log)
 
             print("\n" + "=" * 70)
             print(f"Hierofolio Backtest — {args.method.upper()}")
             print(f"Window: {args.window}y  Step: {args.step}m  Periods: {len(log)}")
+            print(f"Cost:   {cost_label}")
+            if flat_fee_eur > 0:
+                print(f"        (portfolio size: €{args.portfolio_size:,.0f})")
             print("=" * 70)
 
             # Rebalance log as an aligned table
@@ -516,6 +598,8 @@ Examples:
             print(f"  {'Ann Vol':20}  {s_vol:>11.2%}  {e_vol:>11.2%}")
             print(f"  {'Sharpe':20}  {s_shr:>11.4f}  {e_shr:>11.4f}")
             print(f"  {'Max Drawdown':20}  {s_dd:>11.2%}  {e_dd:>11.2%}")
+            if total_cost > 0:
+                print(f"  {'Cost drag (total)':20}  {-total_cost:>11.2%}")
         except Exception as e:
             print(f"✗ Error: {e}")
             return 1

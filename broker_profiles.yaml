@@ -1,0 +1,35 @@
+# Broker cost profiles for transaction cost modelling in backtests.
+#
+# flat_eur:      flat fee per trade in EUR (charged per asset traded)
+# bps_per_side:  spread + commission in basis points (1 bps = 0.01%), one-way
+#
+# These are approximations for liquid UCITS ETFs on major exchanges.
+# Country-specific transaction taxes are NOT included — add them via
+# --cost-bps if applicable. Common examples:
+#   Belgium TOB:  35 bps (0.35%) on ETF purchases
+#   France TTF:   30 bps (0.30%) on French large-caps (not ETFs)
+#   Italy TTF:    20 bps (0.20%) on Italian shares (not ETFs)
+
+xtb:
+  name: XTB
+  flat_eur: 0.0
+  bps_per_side: 2.5
+  note: "Commission-free up to €100k/month; spread only (~2.5 bps/side)"
+
+degiro:
+  name: DEGIRO
+  flat_eur: 1.0
+  bps_per_side: 3.0
+  note: "Core ETF list: €1 flat + 3 bps/side; free ETF once/month on select ISINs"
+
+traderepublic:
+  name: Trade Republic
+  flat_eur: 1.0
+  bps_per_side: 1.5
+  note: "€1 flat + ~1.5 bps/side spread; cost is size-dependent — use --portfolio-size"
+
+ibkr:
+  name: Interactive Brokers
+  flat_eur: 0.0
+  bps_per_side: 5.0
+  note: "~0.05%/side, min €1.25; approximated as 5 bps/side for trades above €2,500"
