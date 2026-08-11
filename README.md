@@ -267,6 +267,53 @@ risk_model = HRPRiskModel(
 )
 ```
 
+### Allocators
+
+`hierofolio.allocators` puts every weight generator behind one `Allocator`
+protocol — `allocate(risk_model, signal=None, current_weights=None, **params)
+-> pd.Series` — so the CLI, the backtest engine, and your own code call them all
+the same way. Implementations: `HRPAllocator`, `SchurHRPAllocator` (takes
+`gamma`), `MVOAllocator`, `RobustAllocator`, plus an `ALLOCATORS` name→instance
+registry mirroring the CLI `--method` choices.
+
+```python
+from hierofolio.allocators import ALLOCATORS, SchurHRPAllocator
+
+weights = SchurHRPAllocator().allocate(risk_model, gamma=0.5)   # HRP at gamma=0
+weights = ALLOCATORS["hrp"].allocate(risk_model)                # via the registry
+```
+
+`hierofolio.signals` supplies the alpha signal the return-aware optimizers use:
+`HistoricalMeanSignal().signal(returns)` returns `(mu, uncertainty)`.
+
+### Walk-forward backtest engine
+
+`hierofolio.backtest.WalkForwardEngine` is the out-of-sample engine behind
+`analyze backtest`. It is parameterized by a risk-model factory, a `SignalModel`,
+and an `Allocator`, and adds controls the CLI wrapper pins to today's defaults:
+`window_policy` (`rolling` vs `anchored`/expanding), explicit `purge_days` /
+`embargo_days` between train and test, and an optional `param_grid` for nested
+(leak-free) per-fold parameter selection — e.g. choosing Schur-HRP's `gamma`
+per fold. `run_backtest` is a thin wrapper over it reproducing the original
+rolling / `purge_days=1` / `embargo_days=0` behavior exactly.
+
+```python
+from hierofolio.backtest import WalkForwardEngine
+from hierofolio.allocators import SchurHRPAllocator
+from hierofolio.signals import HistoricalMeanSignal
+
+engine = WalkForwardEngine(
+    risk_model_factory=lambda train: HRPRiskModel(train, cluster_mode="full"),
+    signal_model=HistoricalMeanSignal(),
+    allocator=SchurHRPAllocator(),
+    window_policy="anchored",
+    purge_days=1,
+    embargo_days=5,
+    param_grid={"gamma": [0.0, 0.25, 0.5]},   # picked per fold on inner OOS Sharpe
+)
+oos_returns, benchmark_returns, rebalance_log = engine.run(returns)
+```
+
 
 ## Tests
 

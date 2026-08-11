@@ -187,6 +187,17 @@ D_aug = D − γ · Bᵀ A⁻¹ B        (Schur complement of A)
 Schur-HRP is thus the continuous HRP ↔ min-variance dial, which is why it is the
 ideal Phase-1 benchmark rung.
 
+> **Correction (added post-implementation, 2026-08-11).** The "γ = 1 → global
+> minimum-variance" claim above is **not exact** and was revised during
+> implementation. A reference-faithful recursion (Peter Cotton / skfolio) keeps
+> *inverse-variance* weights within clusters at every γ and only augments the
+> covariance, so γ = 1 merely *approaches* min-variance (empirically 1e-2–3e-1
+> off on clean covariances; on a 3-asset problem no augmentation fires at all,
+> so γ = 1 == HRP). It is mathematically impossible for a single within-cluster
+> rule to give HRP at γ = 0 **and** exact min-variance at γ = 1 — the two
+> endpoints require different rules. The γ = 0 ≡ HRP anchor is unaffected. See
+> the revised acceptance criteria below.
+
 **`SchurHRPAllocator.allocate(risk_model, gamma=0.5, ...)`** in `allocators.py`,
 reusing `risk_model.quasi_diagonalized_covariance` (already a property,
 `risk_model.py:434`) for the ordered matrix. Correctness risks to handle
@@ -200,11 +211,11 @@ explicitly:
    `schurComplementary`) rather than reinventing it; let the boundary invariants
    below be the proof of correctness.
 
-**Acceptance (extend `tests/test_allocators.py`):**
-- **γ = 0 ≡ HRP** — `np.allclose(SchurHRPAllocator().allocate(rm, gamma=0), hrp_weights(rm))`. Hard regression anchor.
-- **γ = 1 ≡ min-variance** — matches `Σ⁻¹𝟙 / 𝟙ᵀΣ⁻¹𝟙` on a small clean problem.
+**Acceptance (extend `tests/test_allocators.py`):** *(γ = 1 criterion revised — see the correction note above)*
+- **γ = 0 ≡ HRP** — `np.allclose(SchurHRPAllocator().allocate(rm, gamma=0), hrp_weights(rm))`. Hard regression anchor. **(kept — this one is exact.)**
+- ~~**γ = 1 ≡ min-variance** — matches `Σ⁻¹𝟙 / 𝟙ᵀΣ⁻¹𝟙` on a small clean problem.~~ **Revised (exact equality not achievable):** instead assert min-variance as a strict *variance lower bound* — `schur_var(γ) ≥ minvar_var` for all γ — and that γ = 1 *differs* from HRP on an n ≥ 4 problem with a real 2-2 split (proving cross-block info is used).
 - Weights sum to 1, non-negative, all assets covered.
-- (Optional) concentration increases monotonically in γ toward the min-var solution.
+- ~~(Optional) concentration increases monotonically in γ toward the min-var solution.~~ **Dropped:** verified not robust — on real shrunk covariances raw γ = 1 can *raise* variance above HRP (this is what skfolio's `keep_monotonic` γ-capping exists to fix; not ported here).
 
 **CLI:** add `schur-hrp` to the `--method` choices (`analyze.py:384`,
 `analyze.py:417`) and a `--gamma` flag; validate against HRP through the
