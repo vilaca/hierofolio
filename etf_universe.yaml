@@ -1,0 +1,25 @@
+etfs:
+  IE00B4L5Y983:
+    name: ISHARES CORE MSCI WORLD
+    tickers:
+    - IWDA
+    exchange: NA
+    figi: BBG000P71QK5
+    resolved_at: '2026-08-11T00:34:06.955304'
+    source: OpenFIGI
+  IE00B5BMR087:
+    name: ISHARES CORE S&P 500
+    tickers:
+    - CSSPX
+    exchange: SW
+    figi: BBG000Q362M9
+    resolved_at: '2026-08-11T00:34:07.072684'
+    source: OpenFIGI
+  IE00BKM4GZ66:
+    name: ISHARES CORE EM IMI ACC
+    tickers:
+    - EMIM
+    exchange: LN
+    figi: BBG006B70NW2
+    resolved_at: '2026-08-11T00:34:07.201475'
+    source: OpenFIGI

@@ -1,4 +1,4 @@
-"""Unit tests for RiskModel.py (HRPRiskModel and the portfolio optimizers).
+"""Unit tests for risk_model.py (HRPRiskModel and the portfolio optimizers).
 
 Optimizer tests are skipped automatically if cvxpy is not installed.
 """
@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from RiskModel import (
+from risk_model import (
     HRPRiskModel,
     ConstrainedMVOOptimizer,
     RobustOptimizer,

@@ -47,12 +47,12 @@ ETF's full history from inception). Override with `--config`, `--db`, and
 
 ## Risk model
 
-`RiskModel.py` provides `HRPRiskModel` plus the `ConstrainedMVOOptimizer` and
+`risk_model.py` provides `HRPRiskModel` plus the `ConstrainedMVOOptimizer` and
 `RobustOptimizer` portfolio optimizers. Feed it the returns from the DB:
 
 ```python
 from etf_analyze import read_returns
-from RiskModel import HRPRiskModel
+from risk_model import HRPRiskModel
 
 returns = read_returns("hierofolio.db")
 

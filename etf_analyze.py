@@ -193,7 +193,7 @@ Examples:
             print("Ready for HRPRiskModel:")
             print("""
     from etf_analyze import read_returns
-    from RiskModel import HRPRiskModel
+    from risk_model import HRPRiskModel
 
     returns = read_returns("hierofolio.db")
 
