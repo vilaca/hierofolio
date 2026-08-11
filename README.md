@@ -41,8 +41,9 @@ The tooling is three small scripts around a shared config/DB:
 ```
 
 Defaults: config `etf_universe.yaml`, database `hierofolio.db`, start date
-`2018-01-01`. Override with `--config`, `--db`, and `--start` (see each
-script's `--help`).
+`2000-01-01` (earlier than any UCITS ETF, so the first fetch returns each
+ETF's full history from inception). Override with `--config`, `--db`, and
+`--start` (see each script's `--help`).
 
 ## Risk model
 
@@ -88,13 +89,24 @@ run #2 issues a tiny request instead of re-pulling years of data. `--force` is
 the exception — it re-downloads the full range from the start date and
 overwrites existing rows (use it to pick up restated prices).
 
-**Why does the data start at that date (e.g. 2018-01-02)?**
-The first fetch pulls from `DEFAULT_START_DATE` (`2018-01-01`, in
-`etf_common.py`); 2018-01-02 is just the first trading day after the Jan 1
-holiday. Override per run with `--start 2010-01-01`, or change the default in
-`etf_common.py`. Because fetches are incremental, `--start` only applies on an
-ISIN's *first* fetch — to backfill earlier history later, combine it with
-`--force` (`./etf_fetch.py --start 2010-01-01 --force`).
+**How far back does the data go?**
+The default `DEFAULT_START_DATE` is `2000-01-01` (in `etf_common.py`), which is
+earlier than any UCITS ETF — so the first fetch simply returns each ETF's full
+history from its inception (e.g. IWDA from 2009-09-28), no inception date
+needed. `--start` is an optional *cap* for when you want **less** history:
+`./etf_fetch.py --start 2015-01-01` fetches only from 2015. Because fetches are
+incremental, `--start` only applies on an ISIN's *first* fetch — to re-cut the
+range for already-stored data, add `--force`
+(`./etf_fetch.py --start 2015-01-01 --force`).
+
+**I fetched full history, so why are there fewer combined `Observations` than
+any single ETF has rows?**
+The aligned matrix can only start where *all* ETFs have data, i.e. at the
+latest inception among them. If your youngest fund launched in 2014, the
+combined panel begins in 2014 even though older funds go back further — the
+pre-2014 dates are dropped because the young fund is `NaN` there. So the
+combined count tracks your newest holding; dropping it pushes the common start
+(and the observation count) back.
 
 **What if I run it again after the trading day completes?**
 It picks up the new day. Once the newest stored date is behind "today", the
