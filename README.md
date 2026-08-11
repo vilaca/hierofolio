@@ -77,8 +77,24 @@ pytest test_riskmodel.py
 **If I run `./etf_fetch.py` again, what happens?**
 Each ISIN is only re-downloaded when its newest stored date isn't today
 (`days_behind > 0`). If it's already current, that ISIN loads from the DB
-(cache) with no network call. Otherwise it re-fetches and inserts only the
-missing days — existing rows are left untouched.
+(cache) with no network call. Otherwise the fetch is *incremental*: it
+requests only the range *after* the last stored date (last date + 1 → now)
+and inserts the new days, leaving existing rows untouched. If nothing new is
+available upstream, the already-stored data is kept.
+
+**Why doesn't a re-run pull the whole history again?**
+It used to. Now the download window starts at the ISIN's last stored date, so
+run #2 issues a tiny request instead of re-pulling years of data. `--force` is
+the exception — it re-downloads the full range from the start date and
+overwrites existing rows (use it to pick up restated prices).
+
+**Why does the data start at that date (e.g. 2018-01-02)?**
+The first fetch pulls from `DEFAULT_START_DATE` (`2018-01-01`, in
+`etf_common.py`); 2018-01-02 is just the first trading day after the Jan 1
+holiday. Override per run with `--start 2010-01-01`, or change the default in
+`etf_common.py`. Because fetches are incremental, `--start` only applies on an
+ISIN's *first* fetch — to backfill earlier history later, combine it with
+`--force` (`./etf_fetch.py --start 2010-01-01 --force`).
 
 **What if I run it again after the trading day completes?**
 It picks up the new day. Once the newest stored date is behind "today", the
