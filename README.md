@@ -84,8 +84,28 @@ Key flags (all optional):
 | `--window YEARS` | 3 | Length of the training window in years. |
 | `--step MONTHS` | 3 | Rebalance frequency in months (3 = quarterly). |
 | `--method` | hrp | Same methods and flags as `allocate`. |
+| `--broker BROKER` | none | Apply a named broker cost profile (see below). |
+| `--portfolio-size EUR` | 10000 | Portfolio size in EUR, used to convert flat fees to a fraction of NAV. |
+| `--cost-bps BPS` | none | Manual round-trip cost override in basis points (overrides `--broker`). |
 
-Output includes a per-period rebalance log (so you can see how weights evolved) and overall out-of-sample annualised return, vol, Sharpe, and max drawdown.
+Output includes a per-period rebalance log, overall out-of-sample statistics versus an equal-weight benchmark, and (when costs are modelled) a total cost drag line.
+
+### Broker cost profiles
+
+Transaction costs are modelled per rebalance as: `flat_fee_eur + bps_per_side × notional_traded` per asset. Profiles are stored in `broker_profiles.yaml` and can be edited to reflect your actual terms.
+
+| Profile key | Broker | Model | Approx cost on €10k trade |
+|-------------|--------|-------|--------------------------|
+| `xtb` | XTB | Spread only | ~5 bps round-trip |
+| `degiro` | DEGIRO | €1 + 3 bps/side (core ETF list) | ~8 bps round-trip |
+| `traderepublic` | Trade Republic | €1 flat + 1.5 bps/side | size-dependent |
+| `ibkr` | Interactive Brokers | 5 bps/side (≈ 0.05%, min €1.25) | ~10 bps round-trip |
+
+**Country-specific taxes are not included** in the profiles — add them via `--cost-bps`. For example, Belgian investors pay a 0.35% TOB (35 bps) on ETF purchases:
+
+```bash
+./etf_analyze.py backtest --broker degiro --cost-bps 35 --portfolio-size 20000
+```
 
 ## Practical examples
 
