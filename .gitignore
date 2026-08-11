@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# SQLite transient files (keep the .db itself tracked)
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
