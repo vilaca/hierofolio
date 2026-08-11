@@ -48,10 +48,13 @@ hierofolio analyze allocate --method mvo                     # Mean-Variance
 hierofolio analyze allocate --method robust                  # Robust MVO
 hierofolio analyze allocate --method mvo --max-weight 0.5    # cap 50% per ETF
 hierofolio analyze allocate --method robust --robustness-penalty 50  # stronger diversification
+hierofolio analyze allocate --method crisp                   # CRISP (signal-aware, penalises correlated bets)
+hierofolio analyze allocate --method crisp --corr-penalty 0.2  # lighter redundancy penalty
 
 # 5. Rolling-window out-of-sample backtest
 hierofolio analyze backtest                                  # HRP, 3y window, quarterly
 hierofolio analyze backtest --method mvo --max-weight 0.5
+hierofolio analyze backtest --method crisp --corr-penalty 0.3  # CRISP backtest
 hierofolio analyze backtest --window 5 --step 6             # 5y window, semi-annual
 ```
 
@@ -74,6 +77,7 @@ so the commands work from any directory. Override with `--config`, `--db`, and
 | `hrp-sigma-mu` | Signal-aware HRP — keeps HRP's dendrogram structure but tilts each budget split toward the higher-expected-return branch, controlled by `--tau`. At `--tau 0` it is exactly HRP; higher values lean harder on expected return. Requires a return forecast (historical mean by default). |
 | `mvo` | [Mean-Variance Optimization](https://en.wikipedia.org/wiki/Modern_portfolio_theory) — maximises return minus risk, using historical returns as the signal. Concentrates without `--max-weight`. |
 | `robust` | Robust MVO — like MVO but penalises uncertainty in the return forecast, spreading weights away from concentrated positions. Tune with `--robustness-penalty` (try 10–100). |
+| `crisp` | **C**orrelation-**R**egularized **I**terative **S**hrinkage **P**ortfolios — signal-aware like MVO, but with an extra penalty on weight placed across mutually-correlated assets. Tiny differences in noisy return forecasts no longer produce huge concentration in a redundant correlated cluster. At `--corr-penalty 0` it is exactly MVO; raising it trades some Sharpe for much better diversification. Tune with `--corr-penalty` (γ) and `--risk-aversion` (λ). |
 
 Key flags (all optional):
 
@@ -81,8 +85,10 @@ Key flags (all optional):
 |------|--------|---------|--------|
 | `--gamma γ` | 0–1 | 0.5 | Schur-HRP only. `0` = plain HRP; higher folds in more of the between-cluster correlation, pulling toward a min-variance-like allocation. Try `0.25`–`0.5`; very high values can overshoot, so verify with a backtest. |
 | `--tau τ` | ≥ 0 | 1.0 | HRP-Σμ only. `0` = plain HRP; higher tilts more weight toward higher-expected-return branches. Values of 1–10 produce visible tilts given annualised μ. |
+| `--corr-penalty γ` | ≥ 0 | 0.3 | CRISP only. `0` = MVO exactly; higher penalises weight placed across correlated assets, breaking concentration without a hard cap. Try `0.1`–`0.5`; confirm with a backtest. |
+| `--turnover-penalty τ` | ≥ 0 | 0.0 | CRISP only. Soft L1 penalty pulling the new weights toward the prior portfolio. Active only in a backtest (where the prior weights exist); ignored on a plain `allocate`. |
 | `--max-weight W` | 0–1 | none | Cap any single ETF at W (e.g. `0.5`). Essential for MVO/Robust to avoid full concentration. |
-| `--risk-aversion λ` | > 0 | 1.0 | Higher → more risk-averse; shifts MVO/Robust toward lower-vol allocations. |
+| `--risk-aversion λ` | > 0 | 1.0 | Higher → more risk-averse; shifts MVO/Robust/CRISP toward lower-vol allocations. |
 | `--robustness-penalty ρ` | > 0 | 1.0 | Robust only. Higher → more diversification regardless of the alpha signal. Try 10–100. |
 | `--shrinkage-method` | `ledoit_wolf`, `constant_correlation`, `identity` | `constant_correlation` | [Covariance shrinkage](https://en.wikipedia.org/wiki/Shrinkage_(statistics)) estimator used to build the risk model. |
 | `--shrinkage-intensity α` | 0–1 | 0.3 | Blend between sample and target covariance. Ignored for `ledoit_wolf` (data-driven). |
@@ -96,9 +102,11 @@ Key flags (all optional):
 |------|--------|---------|--------|
 | `--window YEARS` | > 0 | 3 | Length of the training window in years. |
 | `--step MONTHS` | > 0 | 3 | Rebalance frequency in months (3 = quarterly). |
-| `--method` | `hrp`, `schur-hrp`, `hrp-sigma-mu`, `mvo`, `robust` | `hrp` | Same methods and flags as `allocate`. |
+| `--method` | `hrp`, `schur-hrp`, `hrp-sigma-mu`, `mvo`, `robust`, `crisp` | `hrp` | Same methods and flags as `allocate`. |
 | `--gamma γ` | 0–1 | 0.5 | Schur-HRP only. `0` = plain HRP; higher pulls toward a min-variance-like allocation. |
 | `--tau τ` | ≥ 0 | 1.0 | HRP-Σμ only. `0` = plain HRP; higher leans on expected return. |
+| `--corr-penalty γ` | ≥ 0 | 0.3 | CRISP only. `0` = MVO; higher de-concentrates by penalising correlated bets. |
+| `--turnover-penalty τ` | ≥ 0 | 0.0 | CRISP only. Soft L1 pull toward the prior fold's weights. |
 | `--shrinkage-method` | `ledoit_wolf`, `constant_correlation`, `identity` | `constant_correlation` | Covariance shrinkage estimator. |
 | `--shrinkage-intensity α` | 0–1 | 0.3 | Blend between sample and target covariance. Ignored for `ledoit_wolf`. |
 | `--linkage-method` | `ward`, `average`, `complete`, `single` | `ward` | Hierarchical clustering linkage. |
@@ -265,6 +273,47 @@ hierofolio analyze allocate --method hrp-sigma-mu --tau 5
 
 ---
 
+### Get a signal-aware allocation without concentration (CRISP)
+
+```bash
+hierofolio analyze allocate --method crisp
+hierofolio analyze allocate --method crisp --corr-penalty 0.2
+```
+
+*Why:* MVO and Robust MVO are signal-aware — they follow the expected-return forecast — but on most real ETF universes they concentrate everything into one or two funds, because tiny historical-return differences look decisive to a solver with no other constraint. CRISP fixes this with a penalty on weight placed across correlated assets: doubling up on two ETFs that move together (high correlation) costs extra in the objective, so the optimizer naturally spreads without a hard `--max-weight` cap. At `--corr-penalty 0` CRISP is mathematically identical to MVO; turning it up shifts the trade-off from pure signal-chasing toward robust diversification. A value of `0.2`–`0.3` is a sensible starting point.
+
+*How it works:* CRISP solves the same convex program as MVO (`max μᵀw − (λ/2)wᵀΣw`) but adds a second quadratic penalty `−γ · wᵀCw`, where **C** is the correlation matrix and **γ** is `--corr-penalty`. A pair of assets with correlation 0.97 contributes nearly twice as much to `wᵀCw` as an uncorrelated pair — so the solver learns that doubling up on near-identical ETFs is expensive. The result is an allocation that still leans toward high-signal names but spreads across them rather than concentrating on the single best historical performer. Weights always sum to 100%.
+
+---
+
+### Find the right CRISP penalty for your ETF universe
+
+```bash
+hierofolio analyze backtest --method crisp --corr-penalty 0.0   # = MVO
+hierofolio analyze backtest --method crisp --corr-penalty 0.2
+hierofolio analyze backtest --method crisp --corr-penalty 0.5
+hierofolio analyze backtest --method crisp --corr-penalty 1.0
+```
+
+*Why:* How much diversification to trade for signal-following depends on your universe. On a small universe where two funds are near-identical (e.g. MSCI World and S&P 500 at ρ ≈ 0.97), even a light penalty breaks the double-up concentration significantly. On a larger, genuinely diverse universe you may need a higher penalty. Because `--corr-penalty 0` is exactly MVO, this sweep also directly tests whether penalising correlated bets improves your out-of-sample Sharpe or just surrenders return unnecessarily. Compare the rebalance logs as well as the Sharpe — a good penalty value should produce visibly more stable weights than raw MVO.
+
+*How it works:* All runs use the same rebalance dates, training windows, and expected-return signal. The only thing that changes is γ in the objective. At each rebalance the solver finds the weights that maximise `μᵀw − (λ/2)wᵀΣw − γ·wᵀCw`. A higher γ makes the correlation-penalty term dominate at the margin, pulling weight off redundant correlated positions and toward less-correlated names. The transition from γ=0 (MVO) to large γ (near equal-weight) is smooth and convex, so intermediate values give a genuine Pareto trade-off rather than a sharp cliff.
+
+---
+
+### Dampen CRISP turnover in a backtest
+
+```bash
+hierofolio analyze backtest --method crisp --corr-penalty 0.3 --turnover-penalty 0.1
+hierofolio analyze backtest --method crisp --corr-penalty 0.3 --turnover-penalty 0.5
+```
+
+*Why:* Even with CRISP's correlation penalty, the signal can still move weights significantly from one fold to the next — especially when a macro shift rotates leadership between asset classes. `--turnover-penalty` adds a soft cost for deviating from the prior period's weights: the larger it is, the more the optimizer prefers staying put over chasing the new signal. Unlike the hard `--turnover-limit` constraint on MVO/Robust, this is a continuous penalty, so the optimizer can still move when the signal is strong enough to justify the cost. Pair it with `--broker` to see the interaction between model-level turnover control and actual transaction costs.
+
+*How it works:* When the engine reaches a new rebalance date, it has the prior fold's weights (`w₀`). CRISP's objective gains a term `−τ · ‖w − w₀‖₁` (L1 distance from the prior book, scaled by `--turnover-penalty`). The solver trades off signal gain against the cost of moving. On the first fold `w₀` is unavailable (there is no prior period), so the penalty drops out automatically and CRISP behaves like a plain `--corr-penalty`-only solve. Higher `--turnover-penalty` produces lower realised turnover but also slower reaction to genuine regime changes — there is no universally correct value, so backtesting a range is the right approach.
+
+---
+
 ### Find the right signal strength (τ) for your ETF universe
 
 ```bash
@@ -303,14 +352,16 @@ risk_model = HRPRiskModel(
 protocol — `allocate(risk_model, signal=None, current_weights=None, **params)
 -> pd.Series` — so the CLI, the backtest engine, and your own code call them all
 the same way. Implementations: `HRPAllocator`, `SchurHRPAllocator` (takes
-`gamma`), `MVOAllocator`, `RobustAllocator`, plus an `ALLOCATORS` name→instance
-registry mirroring the CLI `--method` choices.
+`gamma`), `HRPSigmaMuAllocator` (takes `tau`), `MVOAllocator`, `RobustAllocator`,
+`CRISPAllocator` (takes `corr_penalty`, `turnover_penalty`), plus an `ALLOCATORS`
+name→instance registry mirroring the CLI `--method` choices.
 
 ```python
-from hierofolio.allocators import ALLOCATORS, SchurHRPAllocator
+from hierofolio.allocators import ALLOCATORS, CRISPAllocator, SchurHRPAllocator
 
-weights = SchurHRPAllocator().allocate(risk_model, gamma=0.5)   # HRP at gamma=0
-weights = ALLOCATORS["hrp"].allocate(risk_model)                # via the registry
+weights = SchurHRPAllocator().allocate(risk_model, gamma=0.5)
+weights = CRISPAllocator().allocate(risk_model, signal=mu, corr_penalty=0.2)
+weights = ALLOCATORS["crisp"].allocate(risk_model, signal=mu)   # via the registry
 ```
 
 `hierofolio.signals` supplies the alpha signal the return-aware optimizers use:
