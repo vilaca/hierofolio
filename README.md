@@ -193,7 +193,6 @@ risk_model = HRPRiskModel(
 )
 ```
 
-The optimizers require `cvxpy` (included in `requirements.txt`).
 
 ## Tests
 
