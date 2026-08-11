@@ -12,6 +12,7 @@ in the SQLite DB read by etf_analyze.py.
 
 import argparse
 import logging
+import os
 import re
 import sqlite3
 import sys
@@ -22,6 +23,7 @@ from typing import Dict, Optional, Tuple
 
 import pandas as pd
 import requests
+import yaml
 import yfinance as yf
 from ftgo import get_xid, get_historical_prices
 
@@ -29,6 +31,7 @@ from etf_common import (
     ConfigManager,
     ETFDefinition,
     DEFAULT_CONFIG,
+    DEFAULT_CURRENCY_META,
     DEFAULT_DB,
     DEFAULT_START_DATE,
 )
@@ -45,7 +48,8 @@ class DataExtractor:
         db_path: str = DEFAULT_DB,
         start_date: str = DEFAULT_START_DATE,
         end_date: Optional[str] = None,
-        force_refresh: bool = False
+        force_refresh: bool = False,
+        currency_meta_path: str = DEFAULT_CURRENCY_META
     ):
         self.config_path = config_path
         self.db_path = db_path
@@ -56,6 +60,11 @@ class DataExtractor:
         # Load config
         self.config_manager = ConfigManager(config_path)
         self.etf_universe = self._load_universe()
+
+        # Pinned ftgo resolution (isin -> {xid, symbol, currency}), so the
+        # security we fetch can't drift as FT Markets search ordering changes.
+        self.currency_meta_path = currency_meta_path
+        self._ftgo_meta = self._load_currency_meta()
 
         # Rate limiting
         self._ftgo_throttled = False
@@ -85,6 +94,36 @@ class DataExtractor:
                 continue
             universe[isin] = ETFDefinition.from_config(isin, data)
         return universe
+
+    def _load_currency_meta(self) -> dict:
+        if os.path.exists(self.currency_meta_path):
+            with open(self.currency_meta_path) as f:
+                return yaml.safe_load(f) or {}
+        return {}
+
+    def _save_currency_meta(self):
+        with open(self.currency_meta_path, 'w') as f:
+            yaml.dump(self._ftgo_meta, f, default_flow_style=False, sort_keys=True)
+
+    def _resolve_ftgo(self, isin: str) -> dict:
+        """Resolve an ISIN to a pinned ftgo security {xid, symbol, currency}.
+
+        Searches ftgo by ISIN (precise) and takes the first match the first
+        time, then reuses the pinned result so the security can't drift as FT
+        Markets search ordering changes. Raises ValueError if nothing matches.
+        """
+        if isin in self._ftgo_meta:
+            return self._ftgo_meta[isin]
+
+        row = get_xid(isin, display_mode="all").iloc[0]  # raises if no matches
+        symbol = str(row['symbol'])
+        # ftgo symbols look like "CSPX:LSE:USD"; the currency is the last part.
+        currency = symbol.split(':')[-1] if ':' in symbol else ''
+        resolved = {'xid': str(row['xid']), 'symbol': symbol, 'currency': currency}
+        self._ftgo_meta[isin] = resolved
+        self._save_currency_meta()
+        logger.info(f"pinned ftgo resolution {isin} -> {symbol} (xid {resolved['xid']})")
+        return resolved
 
     def _init_database(self):
         with sqlite3.connect(self.db_path) as conn:
@@ -151,7 +190,7 @@ class DataExtractor:
             )
             conn.commit()
 
-    def _fetch_ftgo(self, ticker: str, start: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
+    def _fetch_ftgo(self, isin: str, start: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
         if self._ftgo_throttled:
             if self._ftgo_wait_until and datetime.now() < self._ftgo_wait_until:
                 wait_seconds = (self._ftgo_wait_until - datetime.now()).total_seconds()
@@ -162,7 +201,7 @@ class DataExtractor:
 
         start = start if start is not None else self.start_date
         try:
-            xid = get_xid(ticker)
+            xid = self._resolve_ftgo(isin)['xid']
             df = get_historical_prices(
                 xid,
                 start.strftime("%d%m%Y"),
@@ -175,11 +214,11 @@ class DataExtractor:
                 df = df.set_index('Date')
                 return df[['Close']]
         except ValueError as e:
-            # get_xid raises this for a ticker that isn't on FT Markets; fall
-            # back to yfinance rather than aborting. Other ValueErrors propagate.
+            # get_xid raises this when the ISIN isn't on FT Markets; fall back
+            # to yfinance rather than aborting. Other ValueErrors propagate.
             if "No data found" not in str(e):
                 raise
-            logger.info(f"ftgo has no data for {ticker}, falling back")
+            logger.info(f"ftgo has no data for {isin}, falling back")
         except requests.RequestException as e:
             error_str = str(e)
             status = getattr(getattr(e, "response", None), "status_code", None)
@@ -194,7 +233,7 @@ class DataExtractor:
                 self._ftgo_wait_until = datetime.now() + timedelta(seconds=wait_seconds)
                 logger.warning(f"ftgo rate limited. Waiting {wait_seconds}s")
             else:
-                logger.warning(f"ftgo request failed for {ticker}: {e}")
+                logger.warning(f"ftgo request failed for {isin}: {e}")
         return None
 
     def _fetch_yfinance(self, ticker: str, start: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
@@ -262,21 +301,21 @@ class DataExtractor:
             if have_existing and not self.force_refresh:
                 since = existing.index.max() + pd.Timedelta(days=1)
 
-            fetched = None  # (source, ticker) on success
-            for ticker in etf.tickers:
-                df = self._fetch_ftgo(ticker, since)
-                if df is not None and not df.empty:
-                    self._save_prices(isin, df)
-                    fetched = ("ftgo", ticker)
-                    break
-
-                df = self._fetch_yfinance(ticker, since)
-                if df is not None and not df.empty:
-                    self._save_prices(isin, df)
-                    fetched = ("yfinance", ticker)
-                    break
-
-                time.sleep(0.5)
+            fetched = None  # (source, label) on success
+            # ftgo resolves by ISIN (a single, pinned security), so try it once.
+            df = self._fetch_ftgo(isin, since)
+            if df is not None and not df.empty:
+                self._save_prices(isin, df)
+                fetched = ("ftgo", self._ftgo_meta.get(isin, {}).get('symbol'))
+            else:
+                # yfinance is ticker-based; try each configured ticker.
+                for ticker in etf.tickers:
+                    df = self._fetch_yfinance(ticker, since)
+                    if df is not None and not df.empty:
+                        self._save_prices(isin, df)
+                        fetched = ("yfinance", ticker)
+                        break
+                    time.sleep(0.5)
 
             if fetched:
                 source, ticker = fetched
@@ -335,6 +374,8 @@ Examples:
     parser.add_argument('--db', '-d', default=DEFAULT_DB, help='Database file path')
     parser.add_argument('--start', '-s', default=DEFAULT_START_DATE, help='Start date')
     parser.add_argument('--force', '-f', action='store_true', help='Force refresh')
+    parser.add_argument('--currency-meta', default=DEFAULT_CURRENCY_META,
+                        help='Pinned ftgo resolution / currency sidecar path')
 
     args = parser.parse_args()
 
@@ -343,7 +384,8 @@ Examples:
             config_path=args.config,
             db_path=args.db,
             start_date=args.start,
-            force_refresh=args.force
+            force_refresh=args.force,
+            currency_meta_path=args.currency_meta
         )
         prices = extractor.fetch(args.isin)
         logger.info(

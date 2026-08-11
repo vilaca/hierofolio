@@ -17,6 +17,7 @@ import yaml
 
 DEFAULT_CONFIG = "etf_universe.yaml"
 DEFAULT_DB = "hierofolio.db"
+DEFAULT_CURRENCY_META = "currency_metadata.yaml"  # pinned ftgo resolution per ISIN
 DEFAULT_START_DATE = "2000-01-01"  # earlier than any UCITS ETF; sources return from inception
 
 
