@@ -11,55 +11,60 @@ Requires Python 3.14.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 ```
+
+This installs the `hierofolio` command (and the short alias `hfolio`).
 
 ## Workflow
 
-The tooling is three small scripts around a shared config/DB:
+The tool exposes three subcommands around a shared config/DB:
 
-1. **`etf_config.py`** — build the ETF universe YAML from ISINs (via OpenFIGI).
-2. **`etf_fetch.py`** — populate the SQLite price DB (ftgo, with a yfinance fallback).
-3. **`etf_analyze.py`** — returns, summary statistics, portfolio weights, and backtesting.
+1. **`hierofolio config`** — build the ETF universe YAML from ISINs (via OpenFIGI).
+2. **`hierofolio fetch`** — populate the SQLite price DB (ftgo, with a yfinance fallback).
+3. **`hierofolio analyze`** — returns, summary statistics, portfolio weights, and backtesting.
 
 ```bash
 # 1. Add ETFs by ISIN (auto-resolves name, tickers, exchange, FIGI)
-./etf_config.py add IE00BM67HK77
-./etf_config.py add IE00BM67HK77 IE00BDBRDM35 IE00BKM4GZ66
-./etf_config.py list
-./etf_config.py update IE00BM67HK77
+hierofolio config add IE00BM67HK77
+hierofolio config add IE00BM67HK77 IE00BDBRDM35 IE00BKM4GZ66
+hierofolio config list
+hierofolio config update IE00BM67HK77
 
 # 2. Fetch prices into the SQLite DB
-./etf_fetch.py                 # all ETFs in the config
-./etf_fetch.py IE00BM67HK77    # a single ISIN
-./etf_fetch.py --force         # ignore the cache and re-download
+hierofolio fetch                 # all ETFs in the config
+hierofolio fetch IE00BM67HK77    # a single ISIN
+hierofolio fetch --force         # ignore the cache and re-download
 
 # 3. Analyze the stored data
-./etf_analyze.py returns              # returns for all ETFs
-./etf_analyze.py returns IE00BM67HK77 # returns for a single ISIN
-./etf_analyze.py summary              # annualized stats + correlation
+hierofolio analyze returns              # returns for all ETFs
+hierofolio analyze returns IE00BM67HK77 # returns for a single ISIN
+hierofolio analyze summary              # annualized stats + correlation
 
 # 4. Compute portfolio weights
-./etf_analyze.py allocate                                  # HRP (default)
-./etf_analyze.py allocate --method mvo                     # Mean-Variance
-./etf_analyze.py allocate --method robust                  # Robust MVO
-./etf_analyze.py allocate --method mvo --max-weight 0.5    # cap 50% per ETF
-./etf_analyze.py allocate --method robust --robustness-penalty 50  # stronger diversification
+hierofolio analyze allocate                                  # HRP (default)
+hierofolio analyze allocate --method mvo                     # Mean-Variance
+hierofolio analyze allocate --method robust                  # Robust MVO
+hierofolio analyze allocate --method mvo --max-weight 0.5    # cap 50% per ETF
+hierofolio analyze allocate --method robust --robustness-penalty 50  # stronger diversification
 
 # 5. Rolling-window out-of-sample backtest
-./etf_analyze.py backtest                                  # HRP, 3y window, quarterly
-./etf_analyze.py backtest --method mvo --max-weight 0.5
-./etf_analyze.py backtest --window 5 --step 6             # 5y window, semi-annual
+hierofolio analyze backtest                                  # HRP, 3y window, quarterly
+hierofolio analyze backtest --method mvo --max-weight 0.5
+hierofolio analyze backtest --window 5 --step 6             # 5y window, semi-annual
 ```
 
-Defaults: config `etf_universe.yaml`, database `hierofolio.db`, start date
-`2000-01-01` (earlier than any UCITS ETF, so the first fetch returns each
-ETF's full history from inception). Override with `--config`, `--db`, and
-`--start` (see each script's `--help`).
+Both `hierofolio` and the shorter `hfolio` invoke the same tool.
+
+Defaults: config `config/etf_universe.yaml`, database `data/hierofolio.db`,
+start date `2000-01-01` (earlier than any UCITS ETF, so the first fetch returns
+each ETF's full history from inception). Paths resolve against the project root,
+so the commands work from any directory. Override with `--config`, `--db`, and
+`--start` (see each command's `--help`).
 
 ## Allocator
 
-`etf_analyze.py allocate` feeds the stored returns into one of three optimizers and prints the resulting weights plus in-sample portfolio statistics:
+`hierofolio analyze allocate` feeds the stored returns into one of three optimizers and prints the resulting weights plus in-sample portfolio statistics:
 
 | Method | What it does |
 |--------|-------------|
@@ -80,7 +85,7 @@ Key flags (all optional):
 
 ## Backtest
 
-`etf_analyze.py backtest` runs a rolling-window out-of-sample [backtest](https://en.wikipedia.org/wiki/Backtesting): it fits the optimizer on a trailing window of returns, records what the *next* period actually returned (the optimizer never sees this), and repeats at each rebalance date. The result is an honest equity curve — no look-ahead bias.
+`hierofolio analyze backtest` runs a rolling-window out-of-sample [backtest](https://en.wikipedia.org/wiki/Backtesting): it fits the optimizer on a trailing window of returns, records what the *next* period actually returned (the optimizer never sees this), and repeats at each rebalance date. The result is an honest equity curve — no look-ahead bias.
 
 | Flag | Values | Default | Effect |
 |------|--------|---------|--------|
@@ -98,7 +103,7 @@ Output includes a per-period rebalance log, overall out-of-sample statistics ver
 
 ### Broker cost profiles
 
-Transaction costs are modelled per rebalance as: `max(min_eur, flat_fee_eur + bps_per_side × notional_traded)` per asset. The optional `min_eur` is a per-order commission floor (e.g. IBKR's €1.25) that dominates on small trades. Profiles are stored in `broker_profiles.yaml` and can be edited to reflect your actual terms.
+Transaction costs are modelled per rebalance as: `max(min_eur, flat_fee_eur + bps_per_side × notional_traded)` per asset. The optional `min_eur` is a per-order commission floor (e.g. IBKR's €1.25) that dominates on small trades. Profiles are stored in `config/broker_profiles.yaml` and can be edited to reflect your actual terms.
 
 | Profile key | Broker | Model | Approx cost on €10k trade |
 |-------------|--------|-------|--------------------------|
@@ -110,7 +115,7 @@ Transaction costs are modelled per rebalance as: `max(min_eur, flat_fee_eur + bp
 **Country-specific taxes are not included** in the profiles — add them via `--cost-bps`. For example, Belgian investors pay a 0.35% TOB (35 bps) on ETF purchases:
 
 ```bash
-./etf_analyze.py backtest --broker degiro --cost-bps 35 --portfolio-size 20000
+hierofolio analyze backtest --broker degiro --cost-bps 35 --portfolio-size 20000
 ```
 
 ## Practical examples
@@ -118,7 +123,7 @@ Transaction costs are modelled per rebalance as: `max(min_eur, flat_fee_eur + bp
 ### Get your first allocation
 
 ```bash
-./etf_analyze.py allocate
+hierofolio analyze allocate
 ```
 
 *Why:* This is the starting point. It reads your historical prices and tells you how much of your money to put in each ETF using HRP — the most robust method since it doesn't require predicting future returns. Run this whenever you want to know the current suggested weights.
@@ -130,7 +135,7 @@ Transaction costs are modelled per rebalance as: `max(min_eur, flat_fee_eur + bp
 ### Understand why HRP gave each ETF its weight
 
 ```bash
-./etf_analyze.py allocate --verbose
+hierofolio analyze allocate --verbose
 ```
 
 *Why:* HRP's output can be surprising — an ETF with higher volatility can still get a larger allocation than a calmer one. `--verbose` shows the step-by-step calculation: which ETFs cluster together, what the combined risk of each cluster is, and how the budget gets split. Useful when you want to understand (or explain to someone else) why the numbers came out the way they did.
@@ -142,7 +147,7 @@ Transaction costs are modelled per rebalance as: `max(min_eur, flat_fee_eur + bp
 ### Check whether your ETFs are actually diversified
 
 ```bash
-./etf_analyze.py summary
+hierofolio analyze summary
 ```
 
 *Why:* Before running any optimizer, it's worth checking whether your ETFs move together. If the correlation matrix shows values above 0.8 everywhere, your funds are essentially the same bet — no optimizer can create real diversification from that. The summary shows you exactly this. If everything is highly correlated, consider adding a bond or gold ETF to give the model something to work with.
@@ -154,7 +159,7 @@ Transaction costs are modelled per rebalance as: `max(min_eur, flat_fee_eur + bp
 ### Limit how much goes into any single ETF
 
 ```bash
-./etf_analyze.py allocate --method mvo --max-weight 0.5
+hierofolio analyze allocate --method mvo --max-weight 0.5
 ```
 
 *Why:* Without a cap, MVO tends to put everything into whichever ETF had the best past performance — which is rarely a good idea going forward. `--max-weight 0.5` forces the optimizer to spread at least some money across other ETFs. A cap of 0.4–0.5 is a sensible starting point for a 3–5 ETF portfolio.
@@ -166,7 +171,7 @@ Transaction costs are modelled per rebalance as: `max(min_eur, flat_fee_eur + bp
 ### Find out if this actually worked in the past
 
 ```bash
-./etf_analyze.py backtest --method hrp
+hierofolio analyze backtest --method hrp
 ```
 
 *Why:* The `allocate` output is in-sample — it's computed on the same data it's judged on, so it looks better than reality. The backtest is honest: it repeatedly trains on old data and measures what actually happened next. The out-of-sample [Sharpe](https://en.wikipedia.org/wiki/Sharpe_ratio) and max drawdown are what you'd have experienced as a real investor. It also shows an equal-weight benchmark so you can see whether the optimizer added value at all.
@@ -178,8 +183,8 @@ Transaction costs are modelled per rebalance as: `max(min_eur, flat_fee_eur + bp
 ### Compare HRP against MVO
 
 ```bash
-./etf_analyze.py backtest --method hrp
-./etf_analyze.py backtest --method mvo --max-weight 0.5
+hierofolio analyze backtest --method hrp
+hierofolio analyze backtest --method mvo --max-weight 0.5
 ```
 
 *Why:* HRP needs no return forecast and is hard to overfit; MVO uses past returns as a signal and can overfit if the window is wrong. Running both on the same data tells you whether MVO's extra complexity actually pays off for your specific universe. In all-equity portfolios, HRP often matches or beats MVO out-of-sample.
@@ -191,8 +196,8 @@ Transaction costs are modelled per rebalance as: `max(min_eur, flat_fee_eur + bp
 ### See how transaction costs affect your returns
 
 ```bash
-./etf_analyze.py backtest --broker degiro --portfolio-size 15000
-./etf_analyze.py backtest --broker traderepublic --portfolio-size 5000
+hierofolio analyze backtest --broker degiro --portfolio-size 15000
+hierofolio analyze backtest --broker traderepublic --portfolio-size 5000
 ```
 
 *Why:* Rebalancing costs money. A strategy that looks great before costs can look mediocre after them — especially with small portfolios or flat-fee brokers like Trade Republic where €1 per trade is a large fraction of a small position. This shows you the real cost drag and whether quarterly rebalancing is worth it at your portfolio size.
@@ -204,8 +209,8 @@ Transaction costs are modelled per rebalance as: `max(min_eur, flat_fee_eur + bp
 ### Check whether rebalancing less often saves costs
 
 ```bash
-./etf_analyze.py backtest --broker degiro --portfolio-size 10000 --step 3   # quarterly
-./etf_analyze.py backtest --broker degiro --portfolio-size 10000 --step 12  # annually
+hierofolio analyze backtest --broker degiro --portfolio-size 10000 --step 3   # quarterly
+hierofolio analyze backtest --broker degiro --portfolio-size 10000 --step 12  # annually
 ```
 
 *Why:* More frequent rebalancing keeps your weights accurate but costs more. Annual rebalancing is cheaper but lets the portfolio drift. This comparison tells you where the trade-off lands for your broker and portfolio size — often annual rebalancing is competitive with quarterly once costs are included.
@@ -214,14 +219,14 @@ Transaction costs are modelled per rebalance as: `max(min_eur, flat_fee_eur + bp
 
 ## Risk model
 
-`risk_model.py` provides `HRPRiskModel` plus the `ConstrainedMVOOptimizer` and
+`hierofolio.risk_model` provides `HRPRiskModel` plus the `ConstrainedMVOOptimizer` and
 `RobustOptimizer` portfolio optimizers. Feed it the returns from the DB:
 
 ```python
-from etf_analyze import read_returns
-from risk_model import HRPRiskModel
+from hierofolio.analyze import read_returns
+from hierofolio.risk_model import HRPRiskModel
 
-returns = read_returns("hierofolio.db")
+returns = read_returns("data/hierofolio.db")
 
 risk_model = HRPRiskModel(
     returns=returns,
@@ -241,7 +246,7 @@ pytest test_riskmodel.py
 
 ## FAQ
 
-### If I run `./etf_fetch.py` again, what happens?
+### If I run `hierofolio fetch` again, what happens?
 Each ISIN is only re-downloaded when its newest stored date isn't today
 (`days_behind > 0`). If it's already current, that ISIN loads from the DB
 (cache) with no network call. Otherwise the fetch is *incremental*: it
@@ -260,10 +265,10 @@ The default `DEFAULT_START_DATE` is `2000-01-01` (in `etf_common.py`), which is
 earlier than any UCITS ETF — so the first fetch simply returns each ETF's full
 history from its inception (e.g. IWDA from 2009-09-28), no inception date
 needed. `--start` is an optional *cap* for when you want **less** history:
-`./etf_fetch.py --start 2015-01-01` fetches only from 2015. Because fetches are
+`hierofolio fetch --start 2015-01-01` fetches only from 2015. Because fetches are
 incremental, `--start` only applies on an ISIN's *first* fetch — to re-cut the
 range for already-stored data, add `--force`
-(`./etf_fetch.py --start 2015-01-01 --force`).
+(`hierofolio fetch --start 2015-01-01 --force`).
 
 ### I fetched full history, so why are there fewer combined `Observations` than any single ETF has rows?
 The aligned matrix can only start where *all* ETFs have data, i.e. at the
@@ -304,8 +309,8 @@ source restated a past close. Same prices in the DB → same output.
 By **ISIN**, not the ticker. OpenFIGI maps the ISIN to a ticker, but searching
 ftgo by that ticker and taking the first match can return the wrong security
 (a real case: `CSSPX` matched a Cohen & Steers realty fund instead of the
-iShares Core S&P 500). So `etf_fetch.py` searches ftgo by the ISIN, and pins
-the chosen listing's `{xid, symbol, currency}` in `currency_metadata.yaml`.
+iShares Core S&P 500). So `hierofolio fetch` searches ftgo by the ISIN, and pins
+the chosen listing's `{xid, symbol, currency}` in `data/currency_metadata.yaml`.
 Pinning matters because FT Markets search ordering isn't stable — without it a
 later run could silently switch to a different listing/currency.
 
@@ -317,7 +322,7 @@ currency (e.g. IE00B5BMR087 trades as `CSPX:LSE:USD`, `CSP1:LSE:GBX`,
 We store one listing per ISIN, and prefer the listing whose currency matches
 the fund's own base currency (parsed from its name, e.g. "… USD (Acc)" → the
 USD line), falling back to the first match. The choice is recorded in
-`currency_metadata.yaml`.
+`data/currency_metadata.yaml`.
 
 ### Does HRP favour low-volatility assets?
 Not directly — that's Risk Parity (a different method). HRP operates on *clusters*, not individual assets. At each split in the dendrogram it divides the budget between two branches inversely proportional to each branch's variance: the higher-variance branch gets less. Within a branch, an asset with higher vol than its peers gets a smaller slice of that branch's budget. The net effect is that HRP rewards **diversification value** — an asset that is lowly correlated with everything else gets its own branch and therefore a full share of the budget regardless of its own volatility. A highly correlated, high-vol pair share a branch and together receive less. So the driver is correlation structure first, volatility second.
@@ -344,7 +349,7 @@ EMIM receives **38% despite having the highest individual volatility (20% vs 16%
 ### Can I mix currencies across ETFs in the analysis?
 Not meaningfully. Per-asset daily returns are currency-invariant, but a
 covariance/HRP across assets is only coherent if every series is in the same
-currency (or FX-converted). `etf_analyze.py` reads `currency_metadata.yaml` and
+currency (or FX-converted). `hierofolio analyze` reads `data/currency_metadata.yaml` and
 prints a `⚠` warning if the ISINs in a `returns`/`summary` run don't share a
 currency. Preferring each fund's base currency keeps a same-index panel (e.g. a
 book of USD-class ETFs) consistent; genuinely mixing currencies needs FX
