@@ -124,7 +124,7 @@ def read_names(config_path: str = DEFAULT_CONFIG) -> dict:
     return {isin: entry.get('name', isin) for isin, entry in data.get('etfs', {}).items()}
 
 
-def hrp_weights(risk_model: HRPRiskModel) -> pd.Series:
+def hrp_weights(risk_model: HRPRiskModel, verbose: bool = False) -> pd.Series:
     """HRP weights via inverse-variance recursive bisection on the dendrogram."""
     cov = risk_model.covariance()
     assets = risk_model._leaf_order  # dendrogram-ordered for quasi-diagonalization
@@ -135,8 +135,14 @@ def hrp_weights(risk_model: HRPRiskModel) -> pd.Series:
         w = inv_diag / inv_diag.sum()
         return float(w @ sub @ w)
 
+    if verbose:
+        print(f"\nDendrogram leaf order: {' → '.join(assets)}")
+        print("(adjacent assets cluster together)\n")
+        print("Recursive bisection:")
+
     weights = pd.Series(1.0, index=assets)
     clusters = [list(assets)]
+    step = 0
     while clusters:
         next_clusters = []
         for c in clusters:
@@ -147,6 +153,13 @@ def hrp_weights(risk_model: HRPRiskModel) -> pd.Series:
                 alpha = 1 - lv / (lv + rv)
                 weights[left] *= alpha
                 weights[right] *= 1 - alpha
+                if verbose:
+                    step += 1
+                    ls = '{' + ', '.join(left) + '}'
+                    rs = '{' + ', '.join(right) + '}'
+                    print(f"  Step {step}: {ls} vs {rs}")
+                    print(f"    {ls:<40} branch vol {np.sqrt(lv * 252)*100:5.1f}%  →  {alpha:.1%} of parent budget")
+                    print(f"    {rs:<40} branch vol {np.sqrt(rv * 252)*100:5.1f}%  →  {1-alpha:.1%} of parent budget")
                 next_clusters += [left, right]
         clusters = next_clusters
     return weights / weights.sum()
@@ -290,6 +303,10 @@ Examples:
         '--robustness-penalty', type=float, default=1.0, metavar='ρ',
         help='Robustness penalty for robust method (default: 1.0; try 10–100 to see diversification)'
     )
+    allocate_parser.add_argument(
+        '--verbose', action='store_true',
+        help='Show HRP bisection steps (leaf order, branch variances, budget splits)'
+    )
 
     backtest_parser = subparsers.add_parser('backtest', help='Rolling-window out-of-sample backtest')
     backtest_parser.add_argument('--method', choices=['hrp', 'mvo', 'robust'], default='hrp',
@@ -395,7 +412,7 @@ Examples:
 
             method = args.method
             if method == 'hrp':
-                weights = hrp_weights(risk_model)
+                weights = hrp_weights(risk_model, verbose=args.verbose)
             else:
                 alpha = (1 + returns.mean()) ** 252 - 1
                 if method == 'mvo':
