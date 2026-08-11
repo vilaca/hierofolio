@@ -105,21 +105,47 @@ class DataExtractor:
         with open(self.currency_meta_path, 'w') as f:
             yaml.dump(self._ftgo_meta, f, default_flow_style=False, sort_keys=True)
 
+    # Quote currencies we might see in ftgo symbols / fund names.
+    _KNOWN_CCYS = {'USD', 'EUR', 'GBP', 'GBX', 'CHF', 'JPY', 'CAD',
+                   'AUD', 'SEK', 'NOK', 'DKK', 'HKD', 'SGD'}
+
+    @classmethod
+    def _base_currency(cls, name: str) -> Optional[str]:
+        """The fund's share-class currency, parsed from its name.
+
+        e.g. "iShares Core S&P 500 UCITS ETF USD (Acc)" -> "USD".
+        """
+        for tok in reversed(re.findall(r'\b[A-Z]{3}\b', name or '')):
+            if tok in cls._KNOWN_CCYS:
+                return tok
+        return None
+
+    @staticmethod
+    def _symbol_currency(symbol: str) -> str:
+        """ftgo symbols look like "CSPX:LSE:USD"; currency is the last part."""
+        return symbol.split(':')[-1] if ':' in symbol else ''
+
     def _resolve_ftgo(self, isin: str) -> dict:
         """Resolve an ISIN to a pinned ftgo security {xid, symbol, currency}.
 
-        Searches ftgo by ISIN (precise) and takes the first match the first
-        time, then reuses the pinned result so the security can't drift as FT
+        Searches ftgo by ISIN (precise). Prefers the listing quoted in the
+        fund's own share-class currency (from its name) so prices are the true
+        NAV currency, not a venue FX overlay; falls back to the first match.
+        The result is pinned and reused so the security can't drift as FT
         Markets search ordering changes. Raises ValueError if nothing matches.
         """
         if isin in self._ftgo_meta:
             return self._ftgo_meta[isin]
 
-        row = get_xid(isin, display_mode="all").iloc[0]  # raises if no matches
+        matches = get_xid(isin, display_mode="all")  # raises if no matches
+        base = self._base_currency(matches.iloc[0].get('name', ''))
+        preferred = matches[matches['symbol'].map(self._symbol_currency) == base] \
+            if base else matches.iloc[0:0]
+        row = preferred.iloc[0] if not preferred.empty else matches.iloc[0]
+
         symbol = str(row['symbol'])
-        # ftgo symbols look like "CSPX:LSE:USD"; the currency is the last part.
-        currency = symbol.split(':')[-1] if ':' in symbol else ''
-        resolved = {'xid': str(row['xid']), 'symbol': symbol, 'currency': currency}
+        resolved = {'xid': str(row['xid']), 'symbol': symbol,
+                    'currency': self._symbol_currency(symbol)}
         self._ftgo_meta[isin] = resolved
         self._save_currency_meta()
         logger.info(f"pinned ftgo resolution {isin} -> {symbol} (xid {resolved['xid']})")

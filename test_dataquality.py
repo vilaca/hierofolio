@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from etf_analyze import quality_report, read_long
+from etf_analyze import quality_report, read_long, currency_warning
 
 DB_PATH = "hierofolio.db"
 MAX_GAP_DAYS = 5          # a long weekend + a holiday or two
@@ -80,6 +80,32 @@ def test_detects_large_gap():
 # --------------------------------------------------------------------------
 # Integration test: real DB structural invariants (skipped if absent)
 # --------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------
+# Currency-consistency check
+# --------------------------------------------------------------------------
+
+def _write_meta(path, mapping):
+    import yaml
+    path.write_text(yaml.dump({isin: {"currency": c} for isin, c in mapping.items()}))
+
+
+def test_currency_warning_none_when_all_same(tmp_path):
+    meta = tmp_path / "c.yaml"
+    _write_meta(meta, {"A": "USD", "B": "USD"})
+    assert currency_warning(["A", "B"], str(meta)) is None
+
+
+def test_currency_warning_flags_mixed(tmp_path):
+    meta = tmp_path / "c.yaml"
+    _write_meta(meta, {"A": "USD", "B": "EUR"})
+    msg = currency_warning(["A", "B"], str(meta))
+    assert msg and "Mixed currencies" in msg
+
+
+def test_currency_warning_absent_sidecar_is_silent(tmp_path):
+    assert currency_warning(["A", "B"], str(tmp_path / "missing.yaml")) is None
+
 
 @pytest.mark.skipif(not os.path.exists(DB_PATH), reason=f"{DB_PATH} not present")
 def test_real_db_integrity():

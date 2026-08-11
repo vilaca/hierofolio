@@ -135,6 +135,34 @@ only (a) re-fetches even when an ISIN is already current to today, and
 (b) overwrites existing rows instead of keeping them — visible only if the
 source restated a past close. Same prices in the DB → same output.
 
+**How is a security resolved — why not just the ticker?**
+By **ISIN**, not the ticker. OpenFIGI maps the ISIN to a ticker, but searching
+ftgo by that ticker and taking the first match can return the wrong security
+(a real case: `CSSPX` matched a Cohen & Steers realty fund instead of the
+iShares Core S&P 500). So `etf_fetch.py` searches ftgo by the ISIN, and pins
+the chosen listing's `{xid, symbol, currency}` in `currency_metadata.yaml`.
+Pinning matters because FT Markets search ordering isn't stable — without it a
+later run could silently switch to a different listing/currency.
+
+**Does an ISIN have one currency?**
+No. An ISIN identifies one share class with a fixed *NAV/base* currency, but
+that security is cross-listed on several exchanges, each quoting in its own
+currency (e.g. IE00B5BMR087 trades as `CSPX:LSE:USD`, `CSP1:LSE:GBX`,
+`SXR8:GER:EUR`). The **quote** currency depends on the listing, not the ISIN.
+We store one listing per ISIN, and prefer the listing whose currency matches
+the fund's own base currency (parsed from its name, e.g. "… USD (Acc)" → the
+USD line), falling back to the first match. The choice is recorded in
+`currency_metadata.yaml`.
+
+**Can I mix currencies across ETFs in the analysis?**
+Not meaningfully. Per-asset daily returns are currency-invariant, but a
+covariance/HRP across assets is only coherent if every series is in the same
+currency (or FX-converted). `etf_analyze.py` reads `currency_metadata.yaml` and
+prints a `⚠` warning if the ISINs in a `returns`/`summary` run don't share a
+currency. Preferring each fund's base currency keeps a same-index panel (e.g. a
+book of USD-class ETFs) consistent; genuinely mixing currencies needs FX
+conversion, which isn't implemented.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

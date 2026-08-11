@@ -10,13 +10,15 @@ Reads the SQLite DB populated by etf_fetch.py; run that first.
 """
 
 import argparse
+import os
 import sqlite3
 import sys
 
 import numpy as np
 import pandas as pd
+import yaml
 
-from etf_common import DEFAULT_DB
+from etf_common import DEFAULT_CURRENCY_META, DEFAULT_DB
 
 
 def read_prices(db_path: str, isin: str = None) -> pd.DataFrame:
@@ -42,6 +44,30 @@ def read_prices(db_path: str, isin: str = None) -> pd.DataFrame:
 def read_returns(db_path: str, isin: str = None) -> pd.DataFrame:
     """Daily simple returns derived from the stored prices."""
     return read_prices(db_path, isin).pct_change().dropna()
+
+
+def read_currencies(meta_path: str = DEFAULT_CURRENCY_META) -> dict:
+    """ISIN -> pinned quote currency, from the fetch sidecar (empty if absent)."""
+    if not os.path.exists(meta_path):
+        return {}
+    with open(meta_path) as f:
+        meta = yaml.safe_load(f) or {}
+    return {isin: (entry or {}).get('currency', '') for isin, entry in meta.items()}
+
+
+def currency_warning(isins, meta_path: str = DEFAULT_CURRENCY_META):
+    """Warn if the given ISINs aren't all in one currency.
+
+    Returns a message string when the panel mixes currencies (its per-asset
+    returns aren't comparable without FX conversion), else None.
+    """
+    ccy = read_currencies(meta_path)
+    present = {isin: ccy.get(isin, '') for isin in isins}
+    distinct = {c for c in present.values() if c}
+    if len(distinct) > 1:
+        return (f"Mixed currencies across ISINs {present}; returns/covariance "
+                f"are not comparable without FX conversion.")
+    return None
 
 
 def quality_report(prices: pd.DataFrame) -> dict:
@@ -103,6 +129,8 @@ Examples:
     )
 
     parser.add_argument('--db', '-d', default=DEFAULT_DB, help='Database file path')
+    parser.add_argument('--currency-meta', default=DEFAULT_CURRENCY_META,
+                        help='Pinned ftgo resolution / currency sidecar path')
 
     subparsers = parser.add_subparsers(dest='command', help='Command')
 
@@ -120,6 +148,9 @@ Examples:
     if args.command == 'returns':
         try:
             returns = read_returns(args.db, args.isin)
+            warning = currency_warning(returns.columns, args.currency_meta)
+            if warning:
+                print(f"⚠ {warning}")
             print(f"Returns for {len(returns.columns)} ETFs")
             print(f"Date range: {returns.index.min()} to {returns.index.max()}")
             print("\nLast 10 returns:")
@@ -139,6 +170,10 @@ Examples:
             print("\n" + "=" * 70)
             print("Hierofolio Summary")
             print("=" * 70)
+
+            warning = currency_warning(returns.columns, args.currency_meta)
+            if warning:
+                print(f"\n⚠ {warning}")
 
             ann_returns = (1 + returns.mean()) ** 252 - 1
             ann_vol = returns.std() * np.sqrt(252)

@@ -26,14 +26,14 @@ def extractor(tmp_path):
     )
 
 
-def test_resolves_by_isin_taking_first_match(monkeypatch, extractor):
+def test_resolves_by_isin(monkeypatch, extractor):
     seen = {}
 
     def fake_get_xid(query, display_mode="first"):
         seen['query'] = query
         return _matches(
-            {"xid": 26390464, "symbol": "CSPX:LSE:USD", "asset_class": "ETFs"},
-            {"xid": 22015734, "symbol": "SXR8:GER:EUR", "asset_class": "ETFs"},
+            {"xid": 26390464, "symbol": "CSPX:LSE:USD",
+             "name": "iShares Core S&P 500 UCITS ETF USD (Acc)", "asset_class": "ETFs"},
         )
 
     monkeypatch.setattr(etf_fetch, "get_xid", fake_get_xid)
@@ -41,6 +41,36 @@ def test_resolves_by_isin_taking_first_match(monkeypatch, extractor):
 
     assert seen['query'] == "IE00B5BMR087"           # searched by ISIN, not ticker
     assert res == {"xid": "26390464", "symbol": "CSPX:LSE:USD", "currency": "USD"}
+
+
+def test_prefers_the_funds_base_currency(monkeypatch, extractor):
+    # A USD fund cross-listed in EUR/GBX/USD: pick the USD listing even though
+    # it isn't first, because the name says the share class is USD.
+    def fake_get_xid(query, display_mode="first"):
+        name = "iShares Core S&P 500 UCITS ETF USD (Acc)"
+        return _matches(
+            {"xid": 1, "symbol": "SXR8:GER:EUR", "name": name, "asset_class": "ETFs"},
+            {"xid": 2, "symbol": "CSP1:LSE:GBX", "name": name, "asset_class": "ETFs"},
+            {"xid": 3, "symbol": "CSPX:LSE:USD", "name": name, "asset_class": "ETFs"},
+        )
+
+    monkeypatch.setattr(etf_fetch, "get_xid", fake_get_xid)
+    res = extractor._resolve_ftgo("IE00B5BMR087")
+    assert res["symbol"] == "CSPX:LSE:USD" and res["currency"] == "USD"
+
+
+def test_falls_back_to_first_match_when_base_currency_absent(monkeypatch, extractor):
+    # Name says EUR (hedged class) but no EUR listing exists -> first match.
+    def fake_get_xid(query, display_mode="first"):
+        name = "iShares Core S&P 500 UCITS ETF EUR Hedged (Acc)"
+        return _matches(
+            {"xid": 1, "symbol": "AAA:LSE:USD", "name": name, "asset_class": "ETFs"},
+            {"xid": 2, "symbol": "BBB:GER:CHF", "name": name, "asset_class": "ETFs"},
+        )
+
+    monkeypatch.setattr(etf_fetch, "get_xid", fake_get_xid)
+    res = extractor._resolve_ftgo("IE00XXHEDGED0")
+    assert res["symbol"] == "AAA:LSE:USD"
 
 
 def test_resolution_is_pinned_and_reused(monkeypatch, extractor):
