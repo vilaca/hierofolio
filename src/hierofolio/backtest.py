@@ -194,8 +194,12 @@ class WalkForwardEngine:
 
             risk_model = self.risk_model_factory(train)
             mu, _ = self.signal_model.signal(train)
+            # Thread the prior fold's weights as w₀. Only CRISP consumes this
+            # (for its soft turnover penalty); HRP / Schur-HRP / HRP-Σμ ignore it,
+            # and the MVO / Robust allocators don't forward it, so every other
+            # allocator's output is unchanged. First fold: prev_weights is None.
             weights = self.allocator.allocate(
-                risk_model, signal=mu, current_weights=None, **all_params
+                risk_model, signal=mu, current_weights=prev_weights, **all_params
             )
 
             next_rebal = rebalance_dates[i + 1] if i + 1 < len(rebalance_dates) else idx[-1]

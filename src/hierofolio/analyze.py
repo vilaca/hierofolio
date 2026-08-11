@@ -205,6 +205,8 @@ def run_backtest(
     signal_model=None,
     gamma: float = 0.5,
     tau: float = 1.0,
+    corr_penalty: float = 0.3,
+    turnover_penalty: float = 0.0,
 ) -> tuple:
     """Rolling-window backtest. Returns (out-of-sample daily returns, rebalance log)."""
     if signal_model is None:
@@ -231,6 +233,11 @@ def run_backtest(
             method_params["max_weight"] = max_weight
     if method == "hrp-sigma-mu":
         method_params["tau"] = tau
+    if method == "crisp":
+        method_params["max_weight"] = max_weight
+        method_params["risk_aversion"] = risk_aversion
+        method_params["corr_penalty"] = corr_penalty
+        method_params["turnover_penalty"] = turnover_penalty
 
     engine = WalkForwardEngine(
         risk_model_factory=_risk_model_factory,
@@ -291,7 +298,7 @@ Examples:
 
     allocate_parser = subparsers.add_parser('allocate', help='Compute portfolio weights')
     allocate_parser.add_argument(
-        '--method', choices=['hrp', 'schur-hrp', 'hrp-sigma-mu', 'mvo', 'robust'], default='hrp',
+        '--method', choices=['hrp', 'schur-hrp', 'hrp-sigma-mu', 'mvo', 'robust', 'crisp'], default='hrp',
         help='Optimization method (default: hrp)'
     )
     allocate_parser.add_argument(
@@ -315,6 +322,14 @@ Examples:
         help='Robustness penalty for robust method (default: 1.0; try 10–100 to see diversification)'
     )
     allocate_parser.add_argument(
+        '--corr-penalty', type=float, default=0.3, metavar='γ',
+        help='CRISP correlation-redundancy penalty (default: 0.3; 0=MVO, higher→less concentrated)'
+    )
+    allocate_parser.add_argument(
+        '--turnover-penalty', type=float, default=0.0, metavar='τ',
+        help='CRISP soft L1 turnover penalty (default: 0.0)'
+    )
+    allocate_parser.add_argument(
         '--verbose', action='store_true',
         help='Show HRP bisection steps (leaf order, branch variances, budget splits)'
     )
@@ -333,7 +348,7 @@ Examples:
 
     backtest_parser = subparsers.add_parser('backtest', help='Rolling-window out-of-sample backtest')
     backtest_parser.add_argument(
-        '--method', choices=['hrp', 'schur-hrp', 'hrp-sigma-mu', 'mvo', 'robust'], default='hrp',
+        '--method', choices=['hrp', 'schur-hrp', 'hrp-sigma-mu', 'mvo', 'robust', 'crisp'], default='hrp',
         help='Optimization method (default: hrp)'
     )
     backtest_parser.add_argument(
@@ -352,6 +367,14 @@ Examples:
                                  help='Max weight per asset for mvo/robust')
     backtest_parser.add_argument('--risk-aversion', type=float, default=1.0, metavar='λ')
     backtest_parser.add_argument('--robustness-penalty', type=float, default=1.0, metavar='ρ')
+    backtest_parser.add_argument(
+        '--corr-penalty', type=float, default=0.3, metavar='γ',
+        help='CRISP correlation-redundancy penalty (default: 0.3; 0=MVO, higher→less concentrated)'
+    )
+    backtest_parser.add_argument(
+        '--turnover-penalty', type=float, default=0.0, metavar='τ',
+        help='CRISP soft L1 turnover penalty (default: 0.0)'
+    )
     backtest_parser.add_argument(
         '--shrinkage-method', choices=['ledoit_wolf', 'constant_correlation', 'identity'],
         default='constant_correlation', help='Covariance shrinkage method (default: constant_correlation)'
@@ -477,6 +500,9 @@ Examples:
                 "gamma": args.gamma,
                 "tau": args.tau,
             }
+            if method == "crisp":
+                method_params["corr_penalty"] = args.corr_penalty
+                method_params["turnover_penalty"] = args.turnover_penalty
             weights = ALLOCATORS[method].allocate(
                 risk_model, signal=mu, current_weights=None, **method_params
             )
@@ -553,6 +579,8 @@ Examples:
                 linkage_method=args.linkage_method,
                 gamma=args.gamma,
                 tau=args.tau,
+                corr_penalty=args.corr_penalty,
+                turnover_penalty=args.turnover_penalty,
             )
 
             names = read_names(DEFAULT_CONFIG)

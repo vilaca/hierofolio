@@ -882,14 +882,131 @@ class RobustOptimizer(PortfolioOptimizer):
                 indices = [assets.index(a) for a in assets_list if a in assets]
                 if indices:
                     constraints.append(cp.sum(w[indices]) <= max_cluster_exposure)
-        
+
         # --- Solve ---
         problem = cp.Problem(objective, constraints)
         problem.solve(solver=cp.CLARABEL, verbose=False)
-        
+
         if w.value is None:
             raise RuntimeError("Optimization failed to converge")
-        
+
+        return pd.Series(w.value, index=assets)
+
+
+class CRISPOptimizer(PortfolioOptimizer):
+    """Correlation-Regularized Iterative Shrinkage Portfolio optimizer.
+
+    Signal-aware like MVO, but with an extra penalty on weight placed across
+    mutually-correlated assets, so tiny differences in noisy return forecasts
+    don't create huge concentration in redundant bets. Single convex solve:
+
+    max   μ^T w - (λ/2) w^T Σ w - γ w^T C w - τ ||w - w₀||₁
+    s.t.  sum(w) = 1
+          w >= 0
+          w <= max_weight
+
+    where μ = alpha (signal), Σ = covariance (PSD-projected), C = correlation
+    (PSD-projected), λ = risk_aversion, γ = corr_penalty, τ = turnover_penalty.
+
+    γ=0 and τ=0 reduce this exactly to ConstrainedMVOOptimizer (the -λ/2 form
+    is matched deliberately), the hard regression anchor. The correlation and
+    turnover terms are only assembled when their coefficients are active, so the
+    γ=0, τ=0 objective is structurally identical to MVO's.
+    """
+
+    def __init__(
+        self,
+        risk_model: RiskModel,
+        alpha: pd.Series,
+        current_weights: Optional[pd.Series] = None,
+        risk_aversion: float = 1.0,
+        corr_penalty: float = 0.3,
+        turnover_penalty: float = 0.0,
+        psd_eps: float = 1e-10
+    ):
+        """
+        Parameters
+        ----------
+        risk_model : RiskModel
+            Precomputed risk model (source of Σ and C).
+        alpha : pd.Series
+            Expected returns signal μ.
+        current_weights : pd.Series, optional
+            Prior weights w₀. The turnover penalty is active only when this is
+            provided; absent, the term drops out.
+        risk_aversion : float
+            Variance aversion λ.
+        corr_penalty : float
+            Redundancy aversion γ (penalty on weight across correlated assets).
+        turnover_penalty : float
+            Soft L1 turnover penalty τ (distinct from the hard turnover_limit
+            constraint the other optimizers use).
+        psd_eps : float
+            Small constant for PSD projection of both Σ and C.
+        """
+        super().__init__(risk_model, alpha, current_weights)
+        self.risk_aversion = risk_aversion
+        self.corr_penalty = corr_penalty
+        self.turnover_penalty = turnover_penalty
+        self.psd_eps = psd_eps
+
+    def solve(
+        self,
+        max_weight: Optional[float] = 0.20,
+        **kwargs
+    ) -> pd.Series:
+        """Solve the correlation-regularized signal-aware optimization."""
+        assets = self.alpha.index.tolist()
+        n = len(assets)
+
+        # --- PSD projection for numerical safety ---
+        # Reindex to alpha's ordering so Σ rows align with w and alpha; this is
+        # the same order-invariance guard the other optimizers use.
+        Sigma = _project_to_psd(
+            self.risk_model.covariance().reindex(index=assets, columns=assets).values,
+            self.psd_eps,
+        )
+
+        # --- Variables ---
+        w = cp.Variable(n, nonneg=True)
+
+        # --- Objective ---
+        # Base MVO term. γ=0, τ=0 leaves exactly this, so CRISP ≡ ConstrainedMVO.
+        objective = (
+            self.alpha.values @ w
+            - self.risk_aversion * 0.5 * cp.quad_form(w, Sigma)
+        )
+
+        # Correlation-redundancy penalty. C = correlation() as-is (diagonal = 1),
+        # so its diagonal adds a mild L2 concentration penalty and keeps C PSD.
+        # (Zeroing the diagonal for a pure cross-correlation penalty is a valid
+        # variant.) Assembled only when γ > 0 to keep the γ=0 objective identical
+        # to MVO's.
+        if self.corr_penalty > 0:
+            C = _project_to_psd(
+                self.risk_model.correlation()
+                    .reindex(index=assets, columns=assets).values,
+                self.psd_eps,
+            )
+            objective = objective - self.corr_penalty * cp.quad_form(w, C)
+
+        # Soft turnover penalty, active only with a prior w₀ and τ > 0.
+        if self.turnover_penalty > 0 and self.current_weights is not None:
+            w0 = self.current_weights.reindex(assets).fillna(0).values
+            objective = objective - self.turnover_penalty * cp.norm(w - w0, 1)
+
+        # --- Constraints ---
+        constraints = [cp.sum(w) == 1.0]
+        if max_weight is not None:
+            constraints.append(w <= max_weight)
+
+        # --- Solve ---
+        problem = cp.Problem(cp.Maximize(objective), constraints)
+        problem.solve(solver=cp.CLARABEL, verbose=False)
+
+        if w.value is None:
+            raise RuntimeError("CRISP optimization failed to converge")
+
         return pd.Series(w.value, index=assets)
 
 

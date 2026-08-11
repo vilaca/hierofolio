@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from hierofolio.allocators import (
+    CRISPAllocator,
     HRPAllocator,
     HRPSigmaMuAllocator,
     MVOAllocator,
@@ -10,7 +11,12 @@ from hierofolio.allocators import (
     SchurHRPAllocator,
 )
 from hierofolio.analyze import hrp_weights
-from hierofolio.risk_model import ConstrainedMVOOptimizer, HRPRiskModel, RobustOptimizer
+from hierofolio.risk_model import (
+    ConstrainedMVOOptimizer,
+    CRISPOptimizer,
+    HRPRiskModel,
+    RobustOptimizer,
+)
 from hierofolio.signals import HistoricalMeanSignal
 
 
@@ -247,3 +253,38 @@ def test_robust_allocator_parity_with_direct_optimizer(risk_model, returns):
         w_direct.values,
         atol=1e-6,
     )
+
+
+# ---------------------------------------------------------------------------
+# CRISPAllocator — protocol conformance, direct-optimizer parity, MVO anchor
+# ---------------------------------------------------------------------------
+
+def test_crisp_allocator_sum_to_one(risk_model, returns):
+    mu, _ = HistoricalMeanSignal().signal(returns)
+    w = CRISPAllocator().allocate(risk_model, signal=mu)
+    assert abs(w.sum() - 1.0) < 1e-6
+
+
+def test_crisp_allocator_parity_with_direct_optimizer(risk_model, returns):
+    mu, _ = HistoricalMeanSignal().signal(returns)
+    w_alloc = CRISPAllocator().allocate(
+        risk_model, signal=mu, risk_aversion=2.0, corr_penalty=0.4
+    )
+    w_direct = CRISPOptimizer(
+        risk_model=risk_model, alpha=mu, risk_aversion=2.0, corr_penalty=0.4
+    ).solve(max_weight=None)
+    assert np.allclose(
+        w_alloc.reindex(w_direct.index).values,
+        w_direct.values,
+        atol=1e-6,
+    )
+
+
+def test_crisp_allocator_gamma0_equals_mvo_allocator(risk_model, returns):
+    """γ=0, τ=0 CRISP allocator matches the MVO allocator (the parity anchor)."""
+    mu, _ = HistoricalMeanSignal().signal(returns)
+    w_crisp = CRISPAllocator().allocate(
+        risk_model, signal=mu, corr_penalty=0.0, risk_aversion=1.5
+    )
+    w_mvo = MVOAllocator().allocate(risk_model, signal=mu, risk_aversion=1.5)
+    assert np.allclose(w_crisp.reindex(w_mvo.index).values, w_mvo.values, atol=1e-6)

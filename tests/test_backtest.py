@@ -204,6 +204,31 @@ def test_run_backtest_hrp_sigma_mu(returns):
 
 
 # ---------------------------------------------------------------------------
+# CRISP backtest — valid OOS series and weight sum; HRP unaffected by w₀ wiring
+# ---------------------------------------------------------------------------
+
+def test_run_backtest_crisp(returns):
+    oos, ew, log = run_backtest(returns, method="crisp", window_years=2, step_months=6)
+    assert len(oos) > 0
+    assert not oos.isna().any()
+    for entry in log:
+        assert abs(entry["weights"].sum() - 1.0) < 1e-6
+
+
+def test_hrp_allocator_ignores_current_weights(returns):
+    """Step-2 safety: threading prev_weights as w₀ cannot change HRP output.
+
+    The engine now passes current_weights=prev_weights unconditionally; HRP must
+    ignore it, so every non-CRISP allocator's backtest stays identical.
+    """
+    rm = default_factory(returns)
+    w0 = pd.Series(1.0 / rm.covariance().shape[0], index=rm.covariance().columns)
+    w_none = HRPAllocator().allocate(rm, current_weights=None)
+    w_with = HRPAllocator().allocate(rm, current_weights=w0)
+    assert np.allclose(w_none.values, w_with.reindex(w_none.index).values)
+
+
+# ---------------------------------------------------------------------------
 # No-lookahead assertion on inner param selection
 # ---------------------------------------------------------------------------
 

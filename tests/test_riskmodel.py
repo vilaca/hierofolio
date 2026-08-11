@@ -8,6 +8,7 @@ import pytest
 from hierofolio.risk_model import (
     HRPRiskModel,
     ConstrainedMVOOptimizer,
+    CRISPOptimizer,
     RobustOptimizer,
     _project_to_psd,
 )
@@ -443,3 +444,117 @@ def test_robust_uncertainty_index_mismatch_raises(fixed_model, alpha):
     bad_unc = pd.Series(np.ones(len(ASSETS)), index=[f"Z{i}" for i in range(len(ASSETS))])
     with pytest.raises(ValueError, match="uncertainty index"):
         RobustOptimizer(fixed_model, alpha, alpha_uncertainty=bad_unc)
+
+
+# ---------------------------------------------------------------------------
+# CRISPOptimizer — γ=0,τ=0 ≡ MVO anchor, γ-concentration, τ-turnover
+# ---------------------------------------------------------------------------
+
+
+def _correlated_cluster_setup(seed: int = 7):
+    """Risk model with a tightly-correlated high-signal cluster + noise names.
+
+    Three 'C' assets share a common factor (corr ~0.95) and carry the highest
+    alpha; five 'U' assets are mutually uncorrelated with lower alpha. This is
+    the setup where CRISP's γ penalty should pull weight off the redundant
+    correlated cluster. Returns (risk_model, alpha, cluster_asset_names).
+    """
+    rng = np.random.default_rng(seed)
+    n_obs = 600
+    common = rng.standard_normal(n_obs)
+    cols = {}
+    for i in range(3):
+        cols[f"C{i}"] = 0.01 * (0.9 * common + 0.15 * rng.standard_normal(n_obs))
+    for j in range(5):
+        cols[f"U{j}"] = 0.01 * rng.standard_normal(n_obs)
+    returns = pd.DataFrame(cols)
+    model = HRPRiskModel(returns, cluster_mode="full", linkage_method="ward")
+    assets = list(model.covariance().index)
+    alpha = pd.Series(
+        {**{f"C{i}": 0.12 for i in range(3)}, **{f"U{j}": 0.03 for j in range(5)}}
+    ).reindex(assets)
+    return model, alpha, [f"C{i}" for i in range(3)]
+
+
+def test_crisp_gamma0_tau0_equals_mvo(fixed_model, alpha):
+    """Hard regression anchor: γ=0, τ=0 reduces CRISP exactly to ConstrainedMVO."""
+    w_crisp = CRISPOptimizer(fixed_model, alpha, corr_penalty=0.0).solve(max_weight=0.5)
+    w_mvo = ConstrainedMVOOptimizer(fixed_model, alpha).solve(max_weight=0.5)
+    assert np.allclose(w_crisp.values, w_mvo.values, atol=1e-6)
+
+
+def test_crisp_concentration_falls_with_gamma():
+    """Raising γ pulls weight off the correlated cluster and de-concentrates.
+
+    wᵀCw (concentration in correlation space, the penalized quantity) and the
+    weight on the correlated cluster are both monotone non-increasing in γ;
+    turning γ on strictly lowers Herfindahl and the max weight versus MVO (γ=0).
+    """
+    model, alpha, cluster = _correlated_cluster_setup()
+    assets = list(model.covariance().index)
+    C = _project_to_psd(model.correlation().reindex(index=assets, columns=assets).values)
+
+    wcw, hhi, maxw, cluster_wt = {}, {}, {}, {}
+    for g in (0.0, 0.5, 1.0):
+        w = CRISPOptimizer(model, alpha, corr_penalty=g).solve(max_weight=0.5)
+        v = w.reindex(assets).values
+        wcw[g] = float(v @ C @ v)
+        hhi[g] = float(v @ v)
+        maxw[g] = float(v.max())
+        cluster_wt[g] = float(w[cluster].sum())
+
+    # Penalized concentration and correlated-cluster weight fall monotonically.
+    assert wcw[0.0] >= wcw[0.5] - 1e-9
+    assert wcw[0.5] >= wcw[1.0] - 1e-9
+    assert cluster_wt[0.0] >= cluster_wt[0.5] - 1e-9
+    assert cluster_wt[0.5] >= cluster_wt[1.0] - 1e-9
+    # Turning γ on strictly de-concentrates the book relative to MVO.
+    assert hhi[1.0] < hhi[0.0]
+    assert maxw[1.0] < maxw[0.0]
+
+
+def test_crisp_turnover_penalty_pulls_toward_w0(fixed_model, alpha):
+    """Higher τ yields lower realised turnover 0.5·‖w−w₀‖₁ toward the prior book."""
+    w0 = pd.Series(1.0 / len(ASSETS), index=ASSETS)
+
+    def turnover(tau):
+        w = CRISPOptimizer(
+            fixed_model, alpha, current_weights=w0,
+            corr_penalty=0.3, turnover_penalty=tau,
+        ).solve(max_weight=0.5)
+        return 0.5 * np.abs(w.values - w0.values).sum()
+
+    t0, t1, t2 = turnover(0.0), turnover(0.01), turnover(0.05)
+    assert t0 >= t1 - 1e-9
+    assert t1 >= t2 - 1e-9
+    assert t2 < t0  # the penalty actually bites
+
+
+def test_crisp_turnover_penalty_ignored_without_w0(fixed_model, alpha):
+    """With no w₀, the turnover term drops out (no error, valid weights)."""
+    w = CRISPOptimizer(
+        fixed_model, alpha, current_weights=None, turnover_penalty=1.0
+    ).solve(max_weight=0.5)
+    _assert_valid_weights(w, max_weight=0.5)
+
+
+def test_crisp_is_order_invariant(fixed_model, alpha):
+    """Both Σ and C must be aligned to alpha's ordering; γ>0 exercises C."""
+    base = CRISPOptimizer(fixed_model, alpha, corr_penalty=0.3).solve(max_weight=0.5)
+    shuffled = alpha.sample(frac=1.0, random_state=1)
+    shuffled_w = CRISPOptimizer(fixed_model, shuffled, corr_penalty=0.3).solve(max_weight=0.5)
+    aligned = shuffled_w.reindex(base.index)
+    assert np.allclose(aligned.values, base.values, atol=1e-4)
+
+
+@pytest.mark.parametrize("corr_penalty", [0.0, 0.3, 1.0])
+def test_crisp_weights_valid(fixed_model, alpha, corr_penalty):
+    w = CRISPOptimizer(fixed_model, alpha, corr_penalty=corr_penalty).solve(max_weight=0.5)
+    assert list(w.index) == ASSETS
+    _assert_valid_weights(w, max_weight=0.5)
+
+
+def test_crisp_alpha_index_mismatch_raises(fixed_model):
+    bad = pd.Series(np.zeros(len(ASSETS)), index=[f"X{i}" for i in range(len(ASSETS))])
+    with pytest.raises(ValueError, match="Alpha index"):
+        CRISPOptimizer(fixed_model, bad)

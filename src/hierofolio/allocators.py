@@ -4,6 +4,7 @@ import pandas as pd
 
 from hierofolio.risk_model import (
     ConstrainedMVOOptimizer,
+    CRISPOptimizer,
     RiskModel,
     RobustOptimizer,
     _project_to_psd,
@@ -298,10 +299,38 @@ class RobustAllocator:
         return optimizer.solve(max_weight=max_weight)
 
 
+class CRISPAllocator:
+    """Correlation-regularized signal-aware allocator (CRISP).
+
+    Thin adapter over ``CRISPOptimizer``: signal-aware like MVO, plus a
+    redundancy penalty (γ) on correlated bets and a soft turnover penalty (τ)
+    toward ``current_weights``. γ=0, τ=0 reduces to ``MVOAllocator`` exactly.
+    """
+
+    def allocate(
+        self,
+        risk_model: RiskModel,
+        signal: Optional[pd.Series] = None,
+        current_weights: Optional[pd.Series] = None,
+        risk_aversion: float = 1.0,
+        corr_penalty: float = 0.3,
+        turnover_penalty: float = 0.0,
+        max_weight: Optional[float] = None,
+        **params,
+    ) -> pd.Series:
+        optimizer = CRISPOptimizer(
+            risk_model=risk_model, alpha=signal, current_weights=current_weights,
+            risk_aversion=risk_aversion, corr_penalty=corr_penalty,
+            turnover_penalty=turnover_penalty,
+        )
+        return optimizer.solve(max_weight=max_weight)
+
+
 ALLOCATORS: dict = {
     "hrp": HRPAllocator(),
     "schur-hrp": SchurHRPAllocator(),
     "hrp-sigma-mu": HRPSigmaMuAllocator(),
     "mvo": MVOAllocator(),
     "robust": RobustAllocator(),
+    "crisp": CRISPAllocator(),
 }
