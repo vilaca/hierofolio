@@ -23,8 +23,11 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from hierofolio.allocators import ALLOCATORS, HRPAllocator
+from hierofolio.backtest import WalkForwardEngine, _rebalance_cost  # noqa: F401
 from hierofolio.common import DEFAULT_CONFIG, DEFAULT_CURRENCY_META, DEFAULT_DB
-from hierofolio.risk_model import ConstrainedMVOOptimizer, HRPRiskModel, RobustOptimizer
+from hierofolio.risk_model import HRPRiskModel
+from hierofolio.signals import HistoricalMeanSignal
 
 # broker_profiles.yaml is hand-authored config; resolve it against the project
 # root (see hierofolio.common) rather than the package dir.
@@ -162,43 +165,7 @@ def read_names(config_path: str = DEFAULT_CONFIG) -> dict:
 
 def hrp_weights(risk_model: HRPRiskModel, verbose: bool = False) -> pd.Series:
     """HRP weights via inverse-variance recursive bisection on the dendrogram."""
-    cov = risk_model.covariance()
-    assets = risk_model.leaf_order  # dendrogram-ordered for quasi-diagonalization
-
-    def cluster_var(cluster):
-        sub = cov.loc[cluster, cluster].values
-        inv_diag = 1.0 / np.diag(sub)
-        w = inv_diag / inv_diag.sum()
-        return float(w @ sub @ w)
-
-    if verbose:
-        print(f"\nDendrogram leaf order: {' → '.join(assets)}")
-        print("(adjacent assets cluster together)\n")
-        print("Recursive bisection:")
-
-    weights = pd.Series(1.0, index=assets)
-    clusters = [list(assets)]
-    step = 0
-    while clusters:
-        next_clusters = []
-        for c in clusters:
-            if len(c) > 1:
-                mid = len(c) // 2
-                left, right = c[:mid], c[mid:]
-                lv, rv = cluster_var(left), cluster_var(right)
-                alpha = 1 - lv / (lv + rv)
-                weights[left] *= alpha
-                weights[right] *= 1 - alpha
-                if verbose:
-                    step += 1
-                    ls = '{' + ', '.join(left) + '}'
-                    rs = '{' + ', '.join(right) + '}'
-                    print(f"  Step {step}: {ls} vs {rs}")
-                    print(f"    {ls:<40} branch vol {np.sqrt(lv * 252)*100:5.1f}%  →  {alpha:.1%} of parent budget")
-                    print(f"    {rs:<40} branch vol {np.sqrt(rv * 252)*100:5.1f}%  →  {1-alpha:.1%} of parent budget")
-                next_clusters += [left, right]
-        clusters = next_clusters
-    return weights / weights.sum()
+    return HRPAllocator().allocate(risk_model, verbose=verbose)
 
 
 def sri_class(ann_vol: float) -> int:
@@ -219,28 +186,6 @@ def portfolio_stats(weights: pd.Series, returns: pd.DataFrame) -> dict:
     return {"Ann Return": ann_return, "Ann Vol": ann_vol, "Sharpe": sharpe}
 
 
-def _rebalance_cost(
-    w_old: pd.Series,
-    w_new: pd.Series,
-    portfolio_size_eur: float,
-    flat_fee_eur: float,
-    cost_bps_per_side: float,
-    min_fee_eur: float = 0.0,
-) -> float:
-    """Transaction cost as a fraction of portfolio value for one rebalance.
-
-    Per traded asset the cost is ``flat_fee_eur + bps × notional`` but never
-    less than ``min_fee_eur`` — modelling brokers (e.g. IBKR) whose commission
-    has a per-order floor that dominates on small trades.
-    """
-    deltas = (w_new - w_old).abs()
-    traded = deltas[deltas > 1e-4]  # skip dust-level changes
-    cost_eur = sum(
-        max(min_fee_eur, flat_fee_eur + cost_bps_per_side / 10_000 * delta * portfolio_size_eur)
-        for delta in traded
-    )
-    return cost_eur / portfolio_size_eur
-
 
 def run_backtest(
     returns: pd.DataFrame,
@@ -257,37 +202,15 @@ def run_backtest(
     shrinkage_method: str = "constant_correlation",
     shrinkage_intensity: float = 0.3,
     linkage_method: str = "ward",
+    signal_model=None,
+    gamma: float = 0.5,
 ) -> tuple:
     """Rolling-window backtest. Returns (out-of-sample daily returns, rebalance log)."""
-    idx = returns.index
+    if signal_model is None:
+        signal_model = HistoricalMeanSignal()
 
-    # Generate rebalance dates by stepping forward from the first full window
-    d = idx[0] + pd.DateOffset(years=window_years)
-    rebalance_dates = []
-    while d <= idx[-1]:
-        prior = idx[idx <= d]
-        if len(prior):
-            rebalance_dates.append(prior[-1])
-        d += pd.DateOffset(months=step_months)
-
-    if not rebalance_dates:
-        raise ValueError(
-            f"Not enough data for a {window_years}-year window "
-            f"(available: {(idx[-1] - idx[0]).days / 365:.1f} years)."
-        )
-
-    oos_segments = []
-    ew_segments = []
-    log = []
-    prev_weights = None  # tracked to compute per-rebalance turnover
-
-    for i, rebal_date in enumerate(rebalance_dates):
-        train_start = rebal_date - pd.DateOffset(years=window_years)
-        train = returns.loc[train_start:rebal_date]
-        if len(train) < 60:
-            continue
-
-        risk_model = HRPRiskModel(
+    def _risk_model_factory(train):
+        return HRPRiskModel(
             returns=train,
             shrinkage_method=shrinkage_method,
             shrinkage_intensity=shrinkage_intensity,
@@ -295,50 +218,34 @@ def run_backtest(
             linkage_method=linkage_method,
         )
 
-        if method == 'hrp':
-            weights = hrp_weights(risk_model)
-        else:
-            alpha = (1 + train.mean()) ** 252 - 1
-            if method == 'mvo':
-                optimizer = ConstrainedMVOOptimizer(
-                    risk_model=risk_model, alpha=alpha, risk_aversion=risk_aversion,
-                )
-            else:
-                optimizer = RobustOptimizer(
-                    risk_model=risk_model, alpha=alpha, risk_aversion=risk_aversion,
-                    robustness_penalty=robustness_penalty,
-                )
-            weights = optimizer.solve(max_weight=max_weight)
+    method_params: dict = {}
+    if method in ("mvo", "robust"):
+        method_params["max_weight"] = max_weight
+        method_params["risk_aversion"] = risk_aversion
+    if method == "robust":
+        method_params["robustness_penalty"] = robustness_penalty
+    if method == "schur-hrp":
+        method_params["gamma"] = gamma
+        if max_weight is not None:
+            method_params["max_weight"] = max_weight
 
-        next_rebal = rebalance_dates[i + 1] if i + 1 < len(rebalance_dates) else idx[-1]
-        hold = returns.loc[rebal_date:next_rebal].iloc[1:]  # exclude rebal_date itself
-        if hold.empty:
-            continue
-
-        period_oos = hold @ weights.reindex(hold.columns).fillna(0)
-
-        # Deduct transaction cost from the first day of the hold period
-        w_old = prev_weights if prev_weights is not None else pd.Series(
-            1 / len(weights), index=weights.index)
-        cost = _rebalance_cost(
-            w_old, weights, portfolio_size_eur, flat_fee_eur, cost_bps_per_side, min_fee_eur
-        )
-        period_oos.iloc[0] -= cost
-
-        oos_segments.append(period_oos)
-        ew_segments.append(hold.mean(axis=1))
-        log.append({
-            'date': rebal_date.date(),
-            'n_train': len(train),
-            'weights': weights,
-            'cost': cost,
-        })
-        prev_weights = weights
-
-    if not oos_segments:
-        raise ValueError("No out-of-sample periods were generated.")
-
-    return pd.concat(oos_segments), pd.concat(ew_segments), log
+    engine = WalkForwardEngine(
+        risk_model_factory=_risk_model_factory,
+        signal_model=signal_model,
+        allocator=ALLOCATORS[method],
+        window_years=window_years,
+        step_months=step_months,
+        window_policy="rolling",
+        purge_days=1,
+        embargo_days=0,
+        param_grid=None,
+        flat_fee_eur=flat_fee_eur,
+        cost_bps_per_side=cost_bps_per_side,
+        min_fee_eur=min_fee_eur,
+        portfolio_size_eur=portfolio_size_eur,
+    )
+    engine._fixed_params = method_params
+    return engine.run(returns)
 
 
 def main(argv=None):
@@ -381,8 +288,12 @@ Examples:
 
     allocate_parser = subparsers.add_parser('allocate', help='Compute portfolio weights')
     allocate_parser.add_argument(
-        '--method', choices=['hrp', 'mvo', 'robust'], default='hrp',
+        '--method', choices=['hrp', 'schur-hrp', 'mvo', 'robust'], default='hrp',
         help='Optimization method (default: hrp)'
+    )
+    allocate_parser.add_argument(
+        '--gamma', type=float, default=0.5, metavar='γ',
+        help='Schur-HRP cross-block weight (0=plain HRP, higher→toward min-variance; default 0.5)'
     )
     allocate_parser.add_argument(
         '--max-weight', type=float, default=None, metavar='W',
@@ -414,8 +325,14 @@ Examples:
     )
 
     backtest_parser = subparsers.add_parser('backtest', help='Rolling-window out-of-sample backtest')
-    backtest_parser.add_argument('--method', choices=['hrp', 'mvo', 'robust'], default='hrp',
-                                 help='Optimization method (default: hrp)')
+    backtest_parser.add_argument(
+        '--method', choices=['hrp', 'schur-hrp', 'mvo', 'robust'], default='hrp',
+        help='Optimization method (default: hrp)'
+    )
+    backtest_parser.add_argument(
+        '--gamma', type=float, default=0.5, metavar='γ',
+        help='Schur-HRP cross-block weight (0=plain HRP, higher→toward min-variance; default 0.5)'
+    )
     backtest_parser.add_argument('--window', type=int, default=3, metavar='YEARS',
                                  help='Training window in years (default: 3)')
     backtest_parser.add_argument('--step', type=int, default=3, metavar='MONTHS',
@@ -540,24 +457,17 @@ Examples:
             )
 
             method = args.method
-            if method == 'hrp':
-                weights = hrp_weights(risk_model, verbose=args.verbose)
-            else:
-                alpha = (1 + returns.mean()) ** 252 - 1
-                if method == 'mvo':
-                    optimizer = ConstrainedMVOOptimizer(
-                        risk_model=risk_model,
-                        alpha=alpha,
-                        risk_aversion=args.risk_aversion,
-                    )
-                else:
-                    optimizer = RobustOptimizer(
-                        risk_model=risk_model,
-                        alpha=alpha,
-                        risk_aversion=args.risk_aversion,
-                        robustness_penalty=args.robustness_penalty,
-                    )
-                weights = optimizer.solve(max_weight=args.max_weight)
+            mu, _ = HistoricalMeanSignal().signal(returns)
+            method_params = {
+                "verbose": args.verbose,
+                "max_weight": args.max_weight,
+                "risk_aversion": args.risk_aversion,
+                "robustness_penalty": args.robustness_penalty,
+                "gamma": args.gamma,
+            }
+            weights = ALLOCATORS[method].allocate(
+                risk_model, signal=mu, current_weights=None, **method_params
+            )
 
             stats = portfolio_stats(weights, returns)
             names = read_names(DEFAULT_CONFIG)
@@ -629,6 +539,7 @@ Examples:
                 shrinkage_method=args.shrinkage_method,
                 shrinkage_intensity=args.shrinkage_intensity,
                 linkage_method=args.linkage_method,
+                gamma=args.gamma,
             )
 
             names = read_names(DEFAULT_CONFIG)

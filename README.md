@@ -43,6 +43,7 @@ hierofolio analyze summary              # annualized stats + correlation
 
 # 4. Compute portfolio weights
 hierofolio analyze allocate                                  # HRP (default)
+hierofolio analyze allocate --method schur-hrp --gamma 0.5   # HRP + between-cluster correlations
 hierofolio analyze allocate --method mvo                     # Mean-Variance
 hierofolio analyze allocate --method robust                  # Robust MVO
 hierofolio analyze allocate --method mvo --max-weight 0.5    # cap 50% per ETF
@@ -64,11 +65,12 @@ so the commands work from any directory. Override with `--config`, `--db`, and
 
 ## Allocator
 
-`hierofolio analyze allocate` feeds the stored returns into one of three optimizers and prints the resulting weights plus in-sample portfolio statistics:
+`hierofolio analyze allocate` feeds the stored returns into one of four optimizers and prints the resulting weights plus in-sample portfolio statistics:
 
 | Method | What it does |
 |--------|-------------|
 | `hrp` | [Hierarchical Risk Parity](https://en.wikipedia.org/wiki/Hierarchical_Risk_Parity) — splits money down the [clustering tree](https://en.wikipedia.org/wiki/Hierarchical_clustering) inversely to cluster variance. No return forecast needed. |
+| `schur-hrp` | Schur-complementary HRP — plain HRP that *also* uses the correlations **between** clusters (which HRP ignores), folded back in via the [Schur complement](https://en.wikipedia.org/wiki/Schur_complement). A `--gamma` dial runs from plain HRP (0) toward a lower-variance, min-variance-like allocation. No return forecast needed. |
 | `mvo` | [Mean-Variance Optimization](https://en.wikipedia.org/wiki/Modern_portfolio_theory) — maximises return minus risk, using historical returns as the signal. Concentrates without `--max-weight`. |
 | `robust` | Robust MVO — like MVO but penalises uncertainty in the return forecast, spreading weights away from concentrated positions. Tune with `--robustness-penalty` (try 10–100). |
 
@@ -76,6 +78,7 @@ Key flags (all optional):
 
 | Flag | Values | Default | Effect |
 |------|--------|---------|--------|
+| `--gamma γ` | 0–1 | 0.5 | Schur-HRP only. `0` = plain HRP; higher folds in more of the between-cluster correlation, pulling toward a min-variance-like allocation. Try `0.25`–`0.5`; very high values can overshoot, so verify with a backtest. |
 | `--max-weight W` | 0–1 | none | Cap any single ETF at W (e.g. `0.5`). Essential for MVO/Robust to avoid full concentration. |
 | `--risk-aversion λ` | > 0 | 1.0 | Higher → more risk-averse; shifts MVO/Robust toward lower-vol allocations. |
 | `--robustness-penalty ρ` | > 0 | 1.0 | Robust only. Higher → more diversification regardless of the alpha signal. Try 10–100. |
@@ -91,7 +94,8 @@ Key flags (all optional):
 |------|--------|---------|--------|
 | `--window YEARS` | > 0 | 3 | Length of the training window in years. |
 | `--step MONTHS` | > 0 | 3 | Rebalance frequency in months (3 = quarterly). |
-| `--method` | `hrp`, `mvo`, `robust` | `hrp` | Same methods and flags as `allocate`. |
+| `--method` | `hrp`, `schur-hrp`, `mvo`, `robust` | `hrp` | Same methods and flags as `allocate`. |
+| `--gamma γ` | 0–1 | 0.5 | Schur-HRP only. `0` = plain HRP; higher pulls toward a min-variance-like allocation. |
 | `--shrinkage-method` | `ledoit_wolf`, `constant_correlation`, `identity` | `constant_correlation` | Covariance shrinkage estimator. |
 | `--shrinkage-intensity α` | 0–1 | 0.3 | Blend between sample and target covariance. Ignored for `ledoit_wolf`. |
 | `--linkage-method` | `ward`, `average`, `complete`, `single` | `ward` | Hierarchical clustering linkage. |
@@ -168,6 +172,32 @@ hierofolio analyze allocate --method mvo --max-weight 0.5
 
 ---
 
+### Use the correlations *between* clusters, not just within them (Schur-HRP)
+
+```bash
+hierofolio analyze allocate --method schur-hrp --gamma 0.5
+```
+
+*Why:* Plain HRP has a blind spot. When it splits your budget between two groups of ETFs, it looks only at the risk *inside* each group and ignores how the two groups move relative to each other — so two groups that are actually strongly correlated get treated as if they were independent. Schur-HRP puts that missing information back in. `--gamma` is the dial: `0` gives you exactly plain HRP's weights, and turning it up toward `1` leans more on the full correlation structure, pulling the result toward the minimum-variance portfolio (the mix with the smallest overall wobble). `0.25`–`0.5` is a sensible middle; very high values can overshoot and become less stable, so they're best confirmed with a backtest.
+
+*How it works:* It builds the same cluster tree as HRP and walks it the same way, but before each split it adjusts each group's risk estimate using the correlation *between* the two groups (this adjustment is the "Schur complement", scaled by gamma). If the two groups move together a lot, the adjustment recognises they are partly the same bet and shifts the split to avoid doubling down. At `gamma=0` the adjustment is switched off and you recover HRP's exact numbers; as gamma rises it folds in more of the between-group correlation, moving the weights toward the lowest-variance mix without ever fully abandoning HRP's diversification. Weights still always sum to 100%.
+
+---
+
+### Find the right Schur-HRP gamma for your ETFs
+
+```bash
+hierofolio analyze backtest --method schur-hrp --gamma 0.0   # equivalent to plain HRP
+hierofolio analyze backtest --method schur-hrp --gamma 0.5
+hierofolio analyze backtest --method schur-hrp --gamma 1.0
+```
+
+*Why:* How much you should trust the between-cluster correlations depends on your specific ETFs and how noisy those correlations are — there's no universally best gamma. Because `gamma=0` is exactly plain HRP, this sweep doubles as a direct test of whether folding in the extra correlation information actually helped out-of-sample or just added noise. If a middle gamma gets the best out-of-sample [Sharpe](https://en.wikipedia.org/wiki/Sharpe_ratio) with similar stability, that's your sweet spot; if `gamma=0` wins, plain HRP was already enough.
+
+*How it works:* Each run steps through the identical rebalance dates and training windows — the only thing that changes is the gamma handed to the optimizer at each rebalance. Higher gamma folds more between-cluster correlation into every split (see the Schur-HRP allocation example above), so the weights, and therefore the out-of-sample returns, differ between runs. Comparing the resulting Sharpe ratios and drawdowns tells you which gamma survived real, unseen data best — not just which looked best in-sample.
+
+---
+
 ### Find out if this actually worked in the past
 
 ```bash
@@ -241,7 +271,8 @@ risk_model = HRPRiskModel(
 ## Tests
 
 ```bash
-pytest test_riskmodel.py
+pytest                       # whole suite
+pytest tests/test_riskmodel.py   # a single module
 ```
 
 ## FAQ
