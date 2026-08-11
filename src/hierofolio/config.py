@@ -6,15 +6,19 @@ Usage:
     hierofolio config add IE00BM67HK77 IE00BDBRDM35 IE00BKM4GZ66
     hierofolio config list
     hierofolio config update IE00BM67HK77
+    hierofolio config trim
 
 Each ISIN is resolved via OpenFIGI (name, tickers, exchange, FIGI) and written
 to the YAML config consumed by the fetch command.
 """
 
 import argparse
+import sqlite3
 import sys
 
-from hierofolio.common import ConfigManager, DEFAULT_CONFIG
+import yaml
+
+from hierofolio.common import ConfigManager, DEFAULT_CONFIG, DEFAULT_DB, DEFAULT_CURRENCY_META
 
 
 def main(argv=None):
@@ -49,6 +53,14 @@ Examples:
 
     update_parser = subparsers.add_parser('update', help='Update ETF metadata')
     update_parser.add_argument('isin', help='ISIN to update')
+
+    trim_parser = subparsers.add_parser(
+        'trim',
+        help='Remove ISINs not present in both config and DB (keeps intersection)',
+    )
+    trim_parser.add_argument('--db', default=DEFAULT_DB, help='SQLite DB path')
+    trim_parser.add_argument('--currency-meta', default=DEFAULT_CURRENCY_META,
+                             help='Currency metadata YAML path')
 
     args = parser.parse_args(argv)
 
@@ -90,6 +102,53 @@ Examples:
         config = ConfigManager(args.config)
         success = config.update(args.isin)
         return 0 if success else 1
+
+    if args.command == 'trim':
+        cm = ConfigManager(args.config)
+        config_isins = set(dict(cm.list()).keys())
+
+        with sqlite3.connect(args.db) as conn:
+            db_isins = {row[0] for row in conn.execute("SELECT DISTINCT isin FROM prices")}
+
+        try:
+            with open(args.currency_meta) as f:
+                curr_meta = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            curr_meta = {}
+
+        curr_isins = set(curr_meta.keys())
+
+        kept = config_isins & db_isins & curr_isins
+        all_isins = config_isins | db_isins | curr_isins
+
+        if kept == all_isins:
+            print("Nothing to trim — all three files are already in sync.")
+            return 0
+
+        to_remove_config = sorted(config_isins - kept)
+        to_remove_db = sorted(db_isins - kept)
+        to_remove_curr = sorted(curr_isins - kept)
+
+        if to_remove_config:
+            print(f"Removing from config:            {', '.join(to_remove_config)}")
+            for isin in to_remove_config:
+                del cm.config['etfs'][isin]
+            cm._save_config()
+
+        if to_remove_db:
+            print(f"Removing from DB:                {', '.join(to_remove_db)}")
+            with sqlite3.connect(args.db) as conn:
+                conn.executemany("DELETE FROM prices WHERE isin = ?",
+                                 [(isin,) for isin in to_remove_db])
+
+        if to_remove_curr:
+            print(f"Removing from currency metadata: {', '.join(to_remove_curr)}")
+        curr_trimmed = {k: v for k, v in curr_meta.items() if k in kept}
+        with open(args.currency_meta, 'w') as f:
+            yaml.dump(curr_trimmed, f, default_flow_style=False, sort_keys=True)
+
+        print(f"Done — {len(kept)} ISINs kept.")
+        return 0
 
     return 0
 
