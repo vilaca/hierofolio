@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Portfolio analysis — excludes short-history funds (< 2-3 years) so the
-# common return window goes back to 2019 rather than 2024.
+# Portfolio analysis — 25 of 28 ETFs; excludes short-history funds (< 3 years)
+# so the common return window goes back to Oct 2019 rather than 2024.
 #
 # Short-history funds excluded:
 #   IE0006WW1TQ4  X MSCI WORLD EX USA 1C      (from Mar 2024)
