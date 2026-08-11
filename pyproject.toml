@@ -25,6 +25,7 @@ dependencies = [
 [project.scripts]
 hierofolio = "hierofolio.cli:main"
 hfolio     = "hierofolio.cli:main"
+h8o     = "hierofolio.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest"]
