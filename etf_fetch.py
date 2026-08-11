@@ -151,7 +151,7 @@ class DataExtractor:
             )
             conn.commit()
 
-    def _fetch_ftgo(self, ticker: str) -> Optional[pd.DataFrame]:
+    def _fetch_ftgo(self, ticker: str, start: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
         if self._ftgo_throttled:
             if self._ftgo_wait_until and datetime.now() < self._ftgo_wait_until:
                 wait_seconds = (self._ftgo_wait_until - datetime.now()).total_seconds()
@@ -160,11 +160,12 @@ class DataExtractor:
             else:
                 self._ftgo_throttled = False
 
+        start = start if start is not None else self.start_date
         try:
             xid = get_xid(ticker)
             df = get_historical_prices(
                 xid,
-                self.start_date.strftime("%d%m%Y"),
+                start.strftime("%d%m%Y"),
                 self.end_date.strftime("%d%m%Y")
             )
 
@@ -196,7 +197,7 @@ class DataExtractor:
                 logger.warning(f"ftgo request failed for {ticker}: {e}")
         return None
 
-    def _fetch_yfinance(self, ticker: str) -> Optional[pd.DataFrame]:
+    def _fetch_yfinance(self, ticker: str, start: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
         if self._yf_throttled:
             if self._yf_wait_until and datetime.now() < self._yf_wait_until:
                 wait_seconds = (self._yf_wait_until - datetime.now()).total_seconds()
@@ -205,6 +206,7 @@ class DataExtractor:
             else:
                 self._yf_throttled = False
 
+        start = start if start is not None else self.start_date
         try:
             tickers_to_try = [ticker]
             if not any(ticker.endswith(suffix) for suffix in ['.L', '.DE']):
@@ -212,7 +214,7 @@ class DataExtractor:
                     tickers_to_try.append(ticker + suffix)
 
             for t in tickers_to_try:
-                df = yf.download(t, start=self.start_date, end=self.end_date, progress=False)
+                df = yf.download(t, start=start, end=self.end_date, progress=False)
                 if df is not None and not df.empty:
                     return df[['Close']]
         except Exception as e:
@@ -221,6 +223,17 @@ class DataExtractor:
                 self._yf_wait_until = datetime.now() + timedelta(seconds=60)
                 logger.warning("yfinance rate limited. Waiting 60s")
         return None
+
+    def _stored_series(self, isin: str) -> pd.DataFrame:
+        """Full stored close series for an ISIN (date-indexed, 'close' column)."""
+        with sqlite3.connect(self.db_path) as conn:
+            return pd.read_sql_query(
+                "SELECT date, close FROM prices WHERE isin = ? ORDER BY date",
+                conn,
+                params=(isin,),
+                index_col='date',
+                parse_dates=['date']
+            )
 
     def fetch(self, isin: Optional[str] = None) -> pd.DataFrame:
         """Fetch data for specific ISIN or all ETFs and persist to the DB."""
@@ -236,30 +249,45 @@ class DataExtractor:
             if not etf:
                 continue
 
-            cached, df = self._is_cached(isin)
-            if cached and df is not None and not df.empty:
-                logger.info(self._summary(isin, etf.name, "cache", df))
-                data_dict[isin] = df['close']
+            cached, existing = self._is_cached(isin)
+            if cached and existing is not None and not existing.empty:
+                logger.info(self._summary(isin, etf.name, "cache", existing))
+                data_dict[isin] = existing['close']
                 continue
 
+            # Incremental: only pull dates after what we already have, unless
+            # --force (re-download the full range and overwrite).
+            have_existing = existing is not None and not existing.empty
+            since = None
+            if have_existing and not self.force_refresh:
+                since = existing.index.max() + pd.Timedelta(days=1)
+
+            fetched = None  # (source, ticker) on success
             for ticker in etf.tickers:
-                df = self._fetch_ftgo(ticker)
+                df = self._fetch_ftgo(ticker, since)
                 if df is not None and not df.empty:
                     self._save_prices(isin, df)
-                    logger.info(self._summary(isin, etf.name, "ftgo", df, ticker))
-                    data_dict[isin] = df['Close']
+                    fetched = ("ftgo", ticker)
                     break
 
-                df = self._fetch_yfinance(ticker)
+                df = self._fetch_yfinance(ticker, since)
                 if df is not None and not df.empty:
                     self._save_prices(isin, df)
-                    logger.info(self._summary(isin, etf.name, "yfinance", df, ticker))
-                    data_dict[isin] = df['Close']
+                    fetched = ("yfinance", ticker)
                     break
 
                 time.sleep(0.5)
 
-            if isin not in data_dict:
+            if fetched:
+                source, ticker = fetched
+                full = self._stored_series(isin)
+                logger.info(self._summary(isin, etf.name, source, full, ticker))
+                data_dict[isin] = full['close']
+            elif have_existing:
+                # Nothing new upstream; keep what's already stored.
+                logger.info(self._summary(isin, etf.name, "cache", existing))
+                data_dict[isin] = existing['close']
+            else:
                 logger.warning(f"✗ {isin} {etf.name} — all sources failed")
 
         if not data_dict:
