@@ -273,6 +273,33 @@ def test_summary_columns(fixed_model):
 
 
 # ---------------------------------------------------------------------------
+# quasi_diagonalized_covariance
+# ---------------------------------------------------------------------------
+
+def test_quasi_diag_shape_and_labels(fixed_model):
+    qd = fixed_model.quasi_diagonalized_covariance
+    assert qd.shape == (len(ASSETS), len(ASSETS))
+    assert list(qd.index) == list(qd.columns)
+    assert set(qd.index) == set(ASSETS)
+
+
+def test_quasi_diag_is_symmetric(fixed_model):
+    qd = fixed_model.quasi_diagonalized_covariance
+    assert np.allclose(qd.values, qd.values.T)
+
+
+def test_quasi_diag_index_matches_leaf_order(fixed_model):
+    qd = fixed_model.quasi_diagonalized_covariance
+    assert list(qd.index) == fixed_model.leaf_order
+
+
+def test_quasi_diag_values_match_reindexed_cov(fixed_model):
+    order = fixed_model.leaf_order
+    expected = fixed_model.covariance().loc[order, order]
+    assert np.allclose(fixed_model.quasi_diagonalized_covariance.values, expected.values)
+
+
+# ---------------------------------------------------------------------------
 # Hashing & equality (regression for the broken dataclass __eq__)
 # ---------------------------------------------------------------------------
 
@@ -291,6 +318,18 @@ def test_inequality_on_different_config(returns):
 
 def test_not_equal_to_other_types(fixed_model):
     assert fixed_model != "not a model"
+
+
+def test_different_n_clusters_produces_different_hash(returns):
+    a = HRPRiskModel(returns, cluster_mode="fixed", n_clusters=2)
+    b = HRPRiskModel(returns, cluster_mode="fixed", n_clusters=4)
+    assert a != b
+    assert hash(a) != hash(b)
+
+
+def test_cluster_mode_exposed_on_model(fixed_model, full_model):
+    assert fixed_model.cluster_mode == "fixed"
+    assert full_model.cluster_mode == "full"
 
 
 # ---------------------------------------------------------------------------

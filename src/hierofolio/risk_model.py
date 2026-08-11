@@ -16,7 +16,8 @@ def _project_to_psd(cov: np.ndarray, eps: float = 1e-10) -> np.ndarray:
     """Project a covariance matrix to positive semi-definite via eigenvalue clipping."""
     eigvals, eigvecs = np.linalg.eigh(cov)
     eigvals = np.maximum(eigvals, eps)
-    return eigvecs @ np.diag(eigvals) @ eigvecs.T
+    cov = eigvecs @ np.diag(eigvals) @ eigvecs.T
+    return 0.5 * (cov + cov.T)
 
 
 class RiskModel(ABC):
@@ -41,10 +42,15 @@ class RiskModel(ABC):
     def cut(self, level: int) -> Dict[int, List[str]]:
         """
         Return a non-overlapping partition at a given tree level.
-        
+
         For fixed mode: level corresponds to number of clusters.
         For full mode: level corresponds to depth from root.
         """
+        pass
+
+    @property
+    @abstractmethod
+    def cluster_mode(self) -> str:
         pass
 
 
@@ -315,6 +321,7 @@ class HRPRiskModel(RiskModel):
             self.shrinkage_method,
             self.shrinkage_intensity,
             self.cluster_mode,
+            self.n_clusters,
             self.linkage_method,
             returns_hash
         ))
@@ -423,6 +430,12 @@ class HRPRiskModel(RiskModel):
         """Assets in dendrogram leaf order (for quasi-diagonalization)."""
         return list(self._leaf_order)
     
+    @property
+    def quasi_diagonalized_covariance(self) -> pd.DataFrame:
+        """Shrunk covariance reordered by dendrogram leaf order."""
+        order = self.leaf_order
+        return self._shrunk_cov.loc[order, order]
+
     @property
     def cluster_covariances(self) -> Dict[int, pd.DataFrame]:
         """Return covariance matrix for each cluster using SHRUNK covariance."""
