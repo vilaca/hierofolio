@@ -2,30 +2,33 @@
 """hierofolio analysis — returns and summary stats from the price DB.
 
 Usage:
-    ./etf_analyze.py returns              # returns for all ETFs
-    ./etf_analyze.py returns IE00BM67HK77 # returns for a single ISIN
-    ./etf_analyze.py summary              # annualized stats + correlation
-    ./etf_analyze.py allocate             # HRP portfolio weights
-    ./etf_analyze.py allocate --method mvo    # MVO weights
-    ./etf_analyze.py allocate --method robust # Robust weights
-    ./etf_analyze.py backtest             # rolling-window out-of-sample backtest
+    hierofolio analyze returns              # returns for all ETFs
+    hierofolio analyze returns IE00BM67HK77 # returns for a single ISIN
+    hierofolio analyze summary              # annualized stats + correlation
+    hierofolio analyze allocate             # HRP portfolio weights
+    hierofolio analyze allocate --method mvo    # MVO weights
+    hierofolio analyze allocate --method robust # Robust weights
+    hierofolio analyze backtest             # rolling-window out-of-sample backtest
 
-Reads the SQLite DB populated by etf_fetch.py; run that first.
+Reads the SQLite DB populated by the fetch command; run that first.
 """
 
 import argparse
 import os
 import sqlite3
 import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import yaml
 
-from etf_common import DEFAULT_CONFIG, DEFAULT_CURRENCY_META, DEFAULT_DB
-from risk_model import ConstrainedMVOOptimizer, HRPRiskModel, RobustOptimizer
+from hierofolio.common import DEFAULT_CONFIG, DEFAULT_CURRENCY_META, DEFAULT_DB
+from hierofolio.risk_model import ConstrainedMVOOptimizer, HRPRiskModel, RobustOptimizer
 
-DEFAULT_BROKER_PROFILES = os.path.join(os.path.dirname(__file__), "broker_profiles.yaml")
+# broker_profiles.yaml is hand-authored config; resolve it against the project
+# root (see hierofolio.common) rather than the package dir.
+DEFAULT_BROKER_PROFILES = str(Path(__file__).resolve().parents[2] / "config" / "broker_profiles.yaml")
 
 
 def load_broker_profiles(path: str = DEFAULT_BROKER_PROFILES) -> dict:
@@ -338,30 +341,30 @@ def run_backtest(
     return pd.concat(oos_segments), pd.concat(ew_segments), log
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
-        prog="etf_analyze",
+        prog="hierofolio analyze",
         description="Returns and summary statistics from the price DB",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Show the returns DataFrame (tail) for all ETFs
-  ./etf_analyze.py returns
+  hierofolio analyze returns
 
   # Returns for a single ETF
-  ./etf_analyze.py returns IE00BM67HK77
+  hierofolio analyze returns IE00BM67HK77
 
   # Annualized stats and correlation matrix
-  ./etf_analyze.py summary
+  hierofolio analyze summary
 
   # Portfolio weights (HRP by default)
-  ./etf_analyze.py allocate
-  ./etf_analyze.py allocate --method mvo
-  ./etf_analyze.py allocate --method robust --max-weight 0.5
+  hierofolio analyze allocate
+  hierofolio analyze allocate --method mvo
+  hierofolio analyze allocate --method robust --max-weight 0.5
 
   # Rolling-window out-of-sample backtest (3-year window, quarterly rebalance)
-  ./etf_analyze.py backtest
-  ./etf_analyze.py backtest --method mvo --window 5 --step 6
+  hierofolio analyze backtest
+  hierofolio analyze backtest --method mvo --window 5 --step 6
         """
     )
 
@@ -435,7 +438,7 @@ Examples:
     )
     backtest_parser.add_argument(
         '--broker', choices=list(BROKER_PROFILES), default=None, metavar='BROKER',
-        help=f"Broker cost profile ({', '.join(BROKER_PROFILES)}); see broker_profiles.yaml"
+        help=f"Broker cost profile ({', '.join(BROKER_PROFILES)}); see config/broker_profiles.yaml"
     )
     backtest_parser.add_argument(
         '--portfolio-size', type=float, default=10_000.0, metavar='EUR',
@@ -446,7 +449,7 @@ Examples:
         help='Manual round-trip cost override in bps (overrides --broker)'
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()

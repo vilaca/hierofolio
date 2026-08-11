@@ -10,14 +10,19 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import requests
 import yaml
 
-DEFAULT_CONFIG = "etf_universe.yaml"
-DEFAULT_DB = "hierofolio.db"
-DEFAULT_CURRENCY_META = "currency_metadata.yaml"  # pinned ftgo resolution per ISIN
+# Resolve default inputs/outputs against the project root (two levels above this
+# package: src/hierofolio/common.py -> repo root), so an editable install works
+# from any cwd. The --config / --db / --currency-meta flags remain the overrides.
+_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CONFIG = str(_ROOT / "config" / "etf_universe.yaml")
+DEFAULT_DB = str(_ROOT / "data" / "hierofolio.db")
+DEFAULT_CURRENCY_META = str(_ROOT / "data" / "currency_metadata.yaml")  # pinned ftgo resolution per ISIN
 DEFAULT_START_DATE = "2000-01-01"  # earlier than any UCITS ETF; sources return from inception
 
 

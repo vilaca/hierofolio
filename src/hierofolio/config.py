@@ -2,39 +2,39 @@
 """hierofolio config builder — create/maintain the ETF universe YAML from ISINs.
 
 Usage:
-    ./etf_config.py add IE00BM67HK77
-    ./etf_config.py add IE00BM67HK77 IE00BDBRDM35 IE00BKM4GZ66
-    ./etf_config.py list
-    ./etf_config.py update IE00BM67HK77
+    hierofolio config add IE00BM67HK77
+    hierofolio config add IE00BM67HK77 IE00BDBRDM35 IE00BKM4GZ66
+    hierofolio config list
+    hierofolio config update IE00BM67HK77
 
 Each ISIN is resolved via OpenFIGI (name, tickers, exchange, FIGI) and written
-to the YAML config consumed by etf_fetch.py.
+to the YAML config consumed by the fetch command.
 """
 
 import argparse
 import sys
 
-from etf_common import ConfigManager, DEFAULT_CONFIG
+from hierofolio.common import ConfigManager, DEFAULT_CONFIG
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
-        prog="etf_config",
+        prog="hierofolio config",
         description="Build the ETF universe YAML from ISINs (via OpenFIGI)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Add an ETF by ISIN (auto-resolves name, tickers, exchange)
-  ./etf_config.py add IE00BM67HK77
+  hierofolio config add IE00BM67HK77
 
   # Add multiple ETFs
-  ./etf_config.py add IE00BM67HK77 IE00BDBRDM35 IE00BKM4GZ66
+  hierofolio config add IE00BM67HK77 IE00BDBRDM35 IE00BKM4GZ66
 
   # List all ETFs in the config
-  ./etf_config.py list
+  hierofolio config list
 
   # Refresh an ETF's metadata from OpenFIGI
-  ./etf_config.py update IE00BM67HK77
+  hierofolio config update IE00BM67HK77
         """
     )
 
@@ -50,7 +50,7 @@ Examples:
     update_parser = subparsers.add_parser('update', help='Update ETF metadata')
     update_parser.add_argument('isin', help='ISIN to update')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
@@ -62,7 +62,7 @@ Examples:
 
         if not etfs:
             print("No ETFs in configuration")
-            print("Add one: ./etf_config.py add IE00BM67HK77")
+            print("Add one: hierofolio config add IE00BM67HK77")
             return 0
 
         print(f"\n{'ISIN':<14} {'Name':<50} {'Ticker':<12} {'Exchange'}")

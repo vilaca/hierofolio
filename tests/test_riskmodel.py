@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from risk_model import (
+from hierofolio.risk_model import (
     HRPRiskModel,
     ConstrainedMVOOptimizer,
     RobustOptimizer,

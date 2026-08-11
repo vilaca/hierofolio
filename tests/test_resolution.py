@@ -9,7 +9,7 @@ and reuse it.
 import pandas as pd
 import pytest
 
-import etf_fetch
+from hierofolio import fetch as etf_fetch
 
 
 def _matches(*rows):

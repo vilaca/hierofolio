@@ -12,9 +12,10 @@ import pandas as pd
 import pytest
 import yaml
 
-from etf_analyze import quality_report, read_long, currency_warning, cost_currency_warning
+from hierofolio.analyze import quality_report, read_long, currency_warning, cost_currency_warning
+from hierofolio.common import DEFAULT_DB
 
-DB_PATH = "hierofolio.db"
+DB_PATH = DEFAULT_DB  # project-root data/hierofolio.db, resolved regardless of cwd
 MAX_GAP_DAYS = 5          # a long weekend + a holiday or two
 MAX_ABS_RETURN = 0.5      # no sane broad ETF moves 50% in a day
 

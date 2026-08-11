@@ -4,8 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from etf_analyze import _rebalance_cost, hrp_weights, portfolio_stats, run_backtest
-from risk_model import HRPRiskModel
+from hierofolio.analyze import _rebalance_cost, hrp_weights, portfolio_stats, run_backtest
+from hierofolio.risk_model import HRPRiskModel
 
 
 # ---------------------------------------------------------------------------

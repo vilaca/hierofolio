@@ -2,12 +2,12 @@
 """hierofolio data fetcher — populate the SQLite price DB for the ETF universe.
 
 Usage:
-    ./etf_fetch.py                 # fetch all ETFs in the config
-    ./etf_fetch.py IE00BM67HK77    # fetch a single ISIN
-    ./etf_fetch.py --force         # ignore the cache and re-download
+    hierofolio fetch                 # fetch all ETFs in the config
+    hierofolio fetch IE00BM67HK77    # fetch a single ISIN
+    hierofolio fetch --force         # ignore the cache and re-download
 
 Prices are sourced from ftgo (FT Markets) with a yfinance fallback, and stored
-in the SQLite DB read by etf_analyze.py.
+in the SQLite DB read by the analyze command.
 """
 
 import argparse
@@ -27,7 +27,7 @@ import yaml
 import yfinance as yf
 from ftgo import get_xid, get_historical_prices
 
-from etf_common import (
+from hierofolio.common import (
     ConfigManager,
     ETFDefinition,
     DEFAULT_CONFIG,
@@ -368,7 +368,7 @@ class DataExtractor:
         return combined
 
 
-def main():
+def main(argv=None):
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
@@ -379,19 +379,19 @@ def main():
     logging.getLogger("ftgo").setLevel(logging.WARNING)
 
     parser = argparse.ArgumentParser(
-        prog="etf_fetch",
+        prog="hierofolio fetch",
         description="Populate the SQLite price DB for the ETF universe",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Fetch price data for all ETFs in the config
-  ./etf_fetch.py
+  hierofolio fetch
 
   # Fetch a single ETF
-  ./etf_fetch.py IE00BM67HK77
+  hierofolio fetch IE00BM67HK77
 
   # Force a re-download, ignoring the cache
-  ./etf_fetch.py --force
+  hierofolio fetch --force
         """
     )
 
@@ -403,7 +403,7 @@ Examples:
     parser.add_argument('--currency-meta', default=DEFAULT_CURRENCY_META,
                         help='Pinned ftgo resolution / currency sidecar path')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     try:
         extractor = DataExtractor(
