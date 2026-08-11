@@ -69,24 +69,30 @@ ETF's full history from inception). Override with `--config`, `--db`, and
 
 Key flags (all optional):
 
-| Flag | Default | Effect |
-|------|---------|--------|
-| `--max-weight W` | none | Cap any single ETF at W (e.g. `0.5`). Essential for MVO/Robust to avoid full concentration. |
-| `--risk-aversion λ` | 1.0 | Higher → more risk-averse; shifts MVO/Robust toward lower-vol allocations. |
-| `--robustness-penalty ρ` | 1.0 | Robust only. Higher → more diversification regardless of the alpha signal. |
+| Flag | Values | Default | Effect |
+|------|--------|---------|--------|
+| `--max-weight W` | 0–1 | none | Cap any single ETF at W (e.g. `0.5`). Essential for MVO/Robust to avoid full concentration. |
+| `--risk-aversion λ` | > 0 | 1.0 | Higher → more risk-averse; shifts MVO/Robust toward lower-vol allocations. |
+| `--robustness-penalty ρ` | > 0 | 1.0 | Robust only. Higher → more diversification regardless of the alpha signal. Try 10–100. |
+| `--shrinkage-method` | `ledoit_wolf`, `constant_correlation`, `identity` | `constant_correlation` | Covariance shrinkage estimator used to build the risk model. |
+| `--shrinkage-intensity α` | 0–1 | 0.3 | Blend between sample and target covariance. Ignored for `ledoit_wolf` (data-driven). |
+| `--linkage-method` | `ward`, `average`, `complete`, `single` | `ward` | Hierarchical clustering linkage. `ward` minimises within-cluster variance; `average` is more robust to outliers. |
 
 ## Backtest
 
 `etf_analyze.py backtest` runs a rolling-window out-of-sample evaluation: it fits the optimizer on a trailing window of returns, records what the *next* period actually returned (the optimizer never sees this), and repeats at each rebalance date. The result is an honest equity curve — no look-ahead bias.
 
-| Flag | Default | Effect |
-|------|---------|--------|
-| `--window YEARS` | 3 | Length of the training window in years. |
-| `--step MONTHS` | 3 | Rebalance frequency in months (3 = quarterly). |
-| `--method` | hrp | Same methods and flags as `allocate`. |
-| `--broker BROKER` | none | Apply a named broker cost profile (see below). |
-| `--portfolio-size EUR` | 10000 | Portfolio size in EUR, used to convert flat fees to a fraction of NAV. |
-| `--cost-bps BPS` | none | Manual round-trip cost override in basis points (overrides `--broker`). |
+| Flag | Values | Default | Effect |
+|------|--------|---------|--------|
+| `--window YEARS` | > 0 | 3 | Length of the training window in years. |
+| `--step MONTHS` | > 0 | 3 | Rebalance frequency in months (3 = quarterly). |
+| `--method` | `hrp`, `mvo`, `robust` | `hrp` | Same methods and flags as `allocate`. |
+| `--shrinkage-method` | `ledoit_wolf`, `constant_correlation`, `identity` | `constant_correlation` | Covariance shrinkage estimator. |
+| `--shrinkage-intensity α` | 0–1 | 0.3 | Blend between sample and target covariance. Ignored for `ledoit_wolf`. |
+| `--linkage-method` | `ward`, `average`, `complete`, `single` | `ward` | Hierarchical clustering linkage. |
+| `--broker BROKER` | `xtb`, `degiro`, `traderepublic`, `ibkr` | none | Apply a named broker cost profile (see below). |
+| `--portfolio-size EUR` | > 0 | 10000 | Portfolio size in EUR, used to convert flat fees to a fraction of NAV. |
+| `--cost-bps BPS` | > 0 | none | Manual round-trip cost override in basis points (overrides `--broker`). |
 
 Output includes a per-period rebalance log, overall out-of-sample statistics versus an equal-weight benchmark, and (when costs are modelled) a total cost drag line.
 
@@ -109,69 +115,86 @@ Transaction costs are modelled per rebalance as: `flat_fee_eur + bps_per_side ×
 
 ## Practical examples
 
-**Understand what the optimizer is doing**
+### Get your first allocation
+
+```bash
+./etf_analyze.py allocate
+```
+
+*Why:* This is the starting point. It reads your historical prices and tells you how much of your money to put in each ETF using HRP — the most robust method since it doesn't require predicting future returns. Run this whenever you want to know the current suggested weights.
+
+---
+
+### Understand why HRP gave each ETF its weight
 
 ```bash
 ./etf_analyze.py allocate --verbose
 ```
 
-Shows the dendrogram leaf order, the branch variance at each bisection step, and how the budget is split between clusters. Useful when you want to understand *why* HRP gave a particular ETF a large or small allocation — it's always either because the ETF sits in its own branch (high diversification value) or because it shares a branch with other high-vol, high-corr assets.
+*Why:* HRP's output can be surprising — an ETF with higher volatility can still get a larger allocation than a calmer one. `--verbose` shows the step-by-step calculation: which ETFs cluster together, what the combined risk of each cluster is, and how the budget gets split. Useful when you want to understand (or explain to someone else) why the numbers came out the way they did.
 
 ---
 
-**Compare HRP against constrained MVO out-of-sample**
+### Check whether your ETFs are actually diversified
+
+```bash
+./etf_analyze.py summary
+```
+
+*Why:* Before running any optimizer, it's worth checking whether your ETFs move together. If the correlation matrix shows values above 0.8 everywhere, your funds are essentially the same bet — no optimizer can create real diversification from that. The summary shows you exactly this. If everything is highly correlated, consider adding a bond or gold ETF to give the model something to work with.
+
+---
+
+### Limit how much goes into any single ETF
+
+```bash
+./etf_analyze.py allocate --method mvo --max-weight 0.5
+```
+
+*Why:* Without a cap, MVO tends to put everything into whichever ETF had the best past performance — which is rarely a good idea going forward. `--max-weight 0.5` forces the optimizer to spread at least some money across other ETFs. A cap of 0.4–0.5 is a sensible starting point for a 3–5 ETF portfolio.
+
+---
+
+### Find out if this actually worked in the past
+
+```bash
+./etf_analyze.py backtest --method hrp
+```
+
+*Why:* The `allocate` output is in-sample — it's computed on the same data it's judged on, so it looks better than reality. The backtest is honest: it repeatedly trains on old data and measures what actually happened next. The out-of-sample Sharpe and max drawdown are what you'd have experienced as a real investor. It also shows an equal-weight benchmark so you can see whether the optimizer added value at all.
+
+---
+
+### Compare HRP against MVO
 
 ```bash
 ./etf_analyze.py backtest --method hrp
 ./etf_analyze.py backtest --method mvo --max-weight 0.5
 ```
 
-HRP needs no return forecast; MVO uses trailing returns as its signal. Running both backtests lets you compare their out-of-sample Sharpe and max drawdown on *the same data*, which is the honest way to evaluate whether MVO's extra complexity pays off. In highly correlated universes (like all-equity), HRP typically holds up well because there is little structure for MVO to exploit.
+*Why:* HRP needs no return forecast and is hard to overfit; MVO uses past returns as a signal and can overfit if the window is wrong. Running both on the same data tells you whether MVO's extra complexity actually pays off for your specific universe. In all-equity portfolios, HRP often matches or beats MVO out-of-sample.
 
 ---
 
-**Check whether rebalancing frequency matters**
+### See how transaction costs affect your returns
 
 ```bash
-./etf_analyze.py backtest --step 1   # monthly
-./etf_analyze.py backtest --step 3   # quarterly (default)
-./etf_analyze.py backtest --step 12  # annually
+./etf_analyze.py backtest --broker degiro --portfolio-size 15000
+./etf_analyze.py backtest --broker traderepublic --portfolio-size 5000
 ```
 
-More frequent rebalancing tracks the current risk structure more closely but incurs more transaction costs. Compare the out-of-sample Sharpe across frequencies to find the point of diminishing returns for your universe.
+*Why:* Rebalancing costs money. A strategy that looks great before costs can look mediocre after them — especially with small portfolios or flat-fee brokers like Trade Republic where €1 per trade is a large fraction of a small position. This shows you the real cost drag and whether quarterly rebalancing is worth it at your portfolio size.
 
 ---
 
-**Check whether the training window matters for MVO**
+### Check whether rebalancing less often saves costs
 
 ```bash
-./etf_analyze.py backtest --method mvo --max-weight 0.5 --window 3
-./etf_analyze.py backtest --method mvo --max-weight 0.5 --window 5
+./etf_analyze.py backtest --broker degiro --portfolio-size 10000 --step 3   # quarterly
+./etf_analyze.py backtest --broker degiro --portfolio-size 10000 --step 12  # annually
 ```
 
-A shorter window reacts faster to recent return trends but is noisier. A longer window is more stable but slower to adapt. If both produce similar Sharpe, the shorter window is preferable (less sensitivity to the starting date). If they diverge sharply, MVO is overfitting the trailing window and HRP is likely more robust.
-
----
-
-**See how correlated your ETFs actually are before choosing a method**
-
-```bash
-./etf_analyze.py summary
-```
-
-Look at the correlation matrix. If all correlations are above 0.8, your universe is effectively one cluster — HRP will still work but diversification is limited regardless of method. The real gain comes from adding assets with lower correlation (e.g. bonds, gold, REITs), which gives HRP meaningful tree structure to exploit.
-
----
-
-**Control concentration in MVO**
-
-```bash
-./etf_analyze.py allocate --method mvo                     # likely 100% in one ETF
-./etf_analyze.py allocate --method mvo --max-weight 0.5    # at most 50% per ETF
-./etf_analyze.py allocate --method mvo --max-weight 0.34   # forces roughly equal weight
-```
-
-Unconstrained MVO concentrates everything in the highest-Sharpe asset because historical returns are a noisy signal and the optimizer takes them at face value. `--max-weight` is the practical knob to control this; 0.4–0.5 is a common starting point for a 3–5 ETF portfolio.
+*Why:* More frequent rebalancing keeps your weights accurate but costs more. Annual rebalancing is cheaper but lets the portfolio drift. This comparison tells you where the trade-off lands for your broker and portfolio size — often annual rebalancing is competitive with quarterly once costs are included.
 
 ## Risk model
 
@@ -202,7 +225,7 @@ pytest test_riskmodel.py
 
 ## FAQ
 
-**If I run `./etf_fetch.py` again, what happens?**
+### If I run `./etf_fetch.py` again, what happens?
 Each ISIN is only re-downloaded when its newest stored date isn't today
 (`days_behind > 0`). If it's already current, that ISIN loads from the DB
 (cache) with no network call. Otherwise the fetch is *incremental*: it
@@ -210,13 +233,13 @@ requests only the range *after* the last stored date (last date + 1 → now)
 and inserts the new days, leaving existing rows untouched. If nothing new is
 available upstream, the already-stored data is kept.
 
-**Why doesn't a re-run pull the whole history again?**
+### Why doesn't a re-run pull the whole history again?
 It used to. Now the download window starts at the ISIN's last stored date, so
 run #2 issues a tiny request instead of re-pulling years of data. `--force` is
 the exception — it re-downloads the full range from the start date and
 overwrites existing rows (use it to pick up restated prices).
 
-**How far back does the data go?**
+### How far back does the data go?
 The default `DEFAULT_START_DATE` is `2000-01-01` (in `etf_common.py`), which is
 earlier than any UCITS ETF — so the first fetch simply returns each ETF's full
 history from its inception (e.g. IWDA from 2009-09-28), no inception date
@@ -226,8 +249,7 @@ incremental, `--start` only applies on an ISIN's *first* fetch — to re-cut the
 range for already-stored data, add `--force`
 (`./etf_fetch.py --start 2015-01-01 --force`).
 
-**I fetched full history, so why are there fewer combined `Observations` than
-any single ETF has rows?**
+### I fetched full history, so why are there fewer combined `Observations` than any single ETF has rows?
 The aligned matrix can only start where *all* ETFs have data, i.e. at the
 latest inception among them. If your youngest fund launched in 2014, the
 combined panel begins in 2014 even though older funds go back further — the
@@ -235,34 +257,34 @@ pre-2014 dates are dropped because the young fund is `NaN` there. So the
 combined count tracks your newest holding; dropping it pushes the common start
 (and the observation count) back.
 
-**What if I run it again after the trading day completes?**
+### What if I run it again after the trading day completes?
 It picks up the new day. Once the newest stored date is behind "today", the
 next run re-fetches and the upsert appends the newly published close. (Before
 the change to `days_behind > 0`, a 7-day gate meant a plain run could skip new
 days for up to a week — `--force` was the workaround.)
 
-**Why is there no data for today's date?**
+### Why is there no data for today's date?
 The source only returns *completed* trading days, so today's close isn't
 available until after the market closes. Days with no source data are never
 stored as empty/placeholder rows — they simply don't appear.
 
-**What are "data points" / "trading days" — are they days?**
+### What are "data points" / "trading days" — are they days?
 Yes. One row per day the market was open. Weekends and exchange holidays are
 absent, so ~252 rows per year, one `close` each.
 
-**What does `Observations: N` mean?**
+### What does `Observations: N` mean?
 It's the row count of the *combined* price matrix across all ETFs, not one
 fund. Dates are the union of every ETF's trading days, forward-filled across
 gaps, then rows still missing any ETF are dropped. Because different exchanges
 have different holiday calendars, this union can exceed any single ETF's count.
 
-**Why do I get the same output with and without `--force`?**
+### Why do I get the same output with and without `--force`?
 The summary reports the final data, which is the same either way. `--force`
 only (a) re-fetches even when an ISIN is already current to today, and
 (b) overwrites existing rows instead of keeping them — visible only if the
 source restated a past close. Same prices in the DB → same output.
 
-**How is a security resolved — why not just the ticker?**
+### How is a security resolved — why not just the ticker?
 By **ISIN**, not the ticker. OpenFIGI maps the ISIN to a ticker, but searching
 ftgo by that ticker and taking the first match can return the wrong security
 (a real case: `CSSPX` matched a Cohen & Steers realty fund instead of the
@@ -271,7 +293,7 @@ the chosen listing's `{xid, symbol, currency}` in `currency_metadata.yaml`.
 Pinning matters because FT Markets search ordering isn't stable — without it a
 later run could silently switch to a different listing/currency.
 
-**Does an ISIN have one currency?**
+### Does an ISIN have one currency?
 No. An ISIN identifies one share class with a fixed *NAV/base* currency, but
 that security is cross-listed on several exchanges, each quoting in its own
 currency (e.g. IE00B5BMR087 trades as `CSPX:LSE:USD`, `CSP1:LSE:GBX`,
@@ -281,7 +303,7 @@ the fund's own base currency (parsed from its name, e.g. "… USD (Acc)" → the
 USD line), falling back to the first match. The choice is recorded in
 `currency_metadata.yaml`.
 
-**Does HRP favour low-volatility assets?**
+### Does HRP favour low-volatility assets?
 Not directly — that's Risk Parity (a different method). HRP operates on *clusters*, not individual assets. At each split in the dendrogram it divides the budget between two branches inversely proportional to each branch's variance: the higher-variance branch gets less. Within a branch, an asset with higher vol than its peers gets a smaller slice of that branch's budget. The net effect is that HRP rewards **diversification value** — an asset that is lowly correlated with everything else gets its own branch and therefore a full share of the budget regardless of its own volatility. A highly correlated, high-vol pair share a branch and together receive less. So the driver is correlation structure first, volatility second.
 
 *Worked example* — three assets: IWDA (vol 16%), CSPX (vol 16%), EMIM (vol 20%). IWDA and CSPX are 97% correlated, so the dendrogram merges them first. The tree has two branches: **{IWDA, CSPX}** and **{EMIM}**.
@@ -303,7 +325,7 @@ IWDA  31%   CSPX  31%   EMIM  38%
 
 EMIM receives **38% despite having the highest individual volatility (20% vs 16%)**. It earns that budget because it sits in its own branch — its low correlation with the equity pair makes it a genuine diversifier. The {IWDA + CSPX} branch, despite each fund being only 16% vol, has *combined* variance almost as high as EMIM's alone because the two funds are nearly perfectly correlated and provide no diversification to each other.
 
-**Can I mix currencies across ETFs in the analysis?**
+### Can I mix currencies across ETFs in the analysis?
 Not meaningfully. Per-asset daily returns are currency-invariant, but a
 covariance/HRP across assets is only coherent if every series is in the same
 currency (or FX-converted). `etf_analyze.py` reads `currency_metadata.yaml` and

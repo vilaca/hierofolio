@@ -224,6 +224,9 @@ def run_backtest(
     flat_fee_eur: float = 0.0,
     cost_bps_per_side: float = 0.0,
     portfolio_size_eur: float = 10_000.0,
+    shrinkage_method: str = "constant_correlation",
+    shrinkage_intensity: float = 0.3,
+    linkage_method: str = "ward",
 ) -> tuple:
     """Rolling-window backtest. Returns (out-of-sample daily returns, rebalance log)."""
     idx = returns.index
@@ -256,10 +259,10 @@ def run_backtest(
 
         risk_model = HRPRiskModel(
             returns=train,
-            shrinkage_method="constant_correlation",
-            shrinkage_intensity=0.3,
+            shrinkage_method=shrinkage_method,
+            shrinkage_intensity=shrinkage_intensity,
             cluster_mode="full",
-            linkage_method="ward",
+            linkage_method=linkage_method,
         )
 
         if method == 'hrp':
@@ -365,6 +368,18 @@ Examples:
         '--verbose', action='store_true',
         help='Show HRP bisection steps (leaf order, branch variances, budget splits)'
     )
+    allocate_parser.add_argument(
+        '--shrinkage-method', choices=['ledoit_wolf', 'constant_correlation', 'identity'],
+        default='constant_correlation', help='Covariance shrinkage method (default: constant_correlation)'
+    )
+    allocate_parser.add_argument(
+        '--shrinkage-intensity', type=float, default=0.3, metavar='α',
+        help='Shrinkage intensity 0–1 (default: 0.3; ignored for ledoit_wolf)'
+    )
+    allocate_parser.add_argument(
+        '--linkage-method', choices=['ward', 'average', 'complete', 'single'],
+        default='ward', help='Hierarchical clustering linkage (default: ward)'
+    )
 
     backtest_parser = subparsers.add_parser('backtest', help='Rolling-window out-of-sample backtest')
     backtest_parser.add_argument('--method', choices=['hrp', 'mvo', 'robust'], default='hrp',
@@ -377,6 +392,18 @@ Examples:
                                  help='Max weight per asset for mvo/robust')
     backtest_parser.add_argument('--risk-aversion', type=float, default=1.0, metavar='λ')
     backtest_parser.add_argument('--robustness-penalty', type=float, default=1.0, metavar='ρ')
+    backtest_parser.add_argument(
+        '--shrinkage-method', choices=['ledoit_wolf', 'constant_correlation', 'identity'],
+        default='constant_correlation', help='Covariance shrinkage method (default: constant_correlation)'
+    )
+    backtest_parser.add_argument(
+        '--shrinkage-intensity', type=float, default=0.3, metavar='α',
+        help='Shrinkage intensity 0–1 (default: 0.3; ignored for ledoit_wolf)'
+    )
+    backtest_parser.add_argument(
+        '--linkage-method', choices=['ward', 'average', 'complete', 'single'],
+        default='ward', help='Hierarchical clustering linkage (default: ward)'
+    )
     backtest_parser.add_argument(
         '--broker', choices=list(BROKER_PROFILES), default=None, metavar='BROKER',
         help=f"Broker cost profile ({', '.join(BROKER_PROFILES)}); see broker_profiles.yaml"
@@ -474,10 +501,10 @@ Examples:
 
             risk_model = HRPRiskModel(
                 returns=returns,
-                shrinkage_method="constant_correlation",
-                shrinkage_intensity=0.3,
+                shrinkage_method=args.shrinkage_method,
+                shrinkage_intensity=args.shrinkage_intensity,
                 cluster_mode="full",
-                linkage_method="ward",
+                linkage_method=args.linkage_method,
             )
 
             method = args.method
@@ -557,6 +584,9 @@ Examples:
                 flat_fee_eur=flat_fee_eur,
                 cost_bps_per_side=cost_bps_per_side,
                 portfolio_size_eur=args.portfolio_size,
+                shrinkage_method=args.shrinkage_method,
+                shrinkage_intensity=args.shrinkage_intensity,
+                linkage_method=args.linkage_method,
             )
 
             names = read_names(DEFAULT_CONFIG)
