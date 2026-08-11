@@ -262,7 +262,7 @@ class DataExtractor:
                 logger.warning(f"ftgo request failed for {isin}: {e}")
         return None
 
-    def _fetch_yfinance(self, ticker: str, start: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
+    def _fetch_yfinance(self, ticker: str, start: Optional[pd.Timestamp] = None) -> Optional[Tuple[pd.DataFrame, str]]:
         if self._yf_throttled:
             if self._yf_wait_until and datetime.now() < self._yf_wait_until:
                 wait_seconds = (self._yf_wait_until - datetime.now()).total_seconds()
@@ -281,7 +281,9 @@ class DataExtractor:
             for t in tickers_to_try:
                 df = yf.download(t, start=start, end=self.end_date, progress=False)
                 if df is not None and not df.empty:
-                    return df[['Close']]
+                    if t != ticker:
+                        logger.info(f"yfinance fallback ok: {ticker} -> {t}")
+                    return df[['Close']], t
         except Exception as e:
             if '429' in str(e) or 'rate limit' in str(e).lower():
                 self._yf_throttled = True
@@ -336,10 +338,11 @@ class DataExtractor:
             else:
                 # yfinance is ticker-based; try each configured ticker.
                 for ticker in etf.tickers:
-                    df = self._fetch_yfinance(ticker, since)
-                    if df is not None and not df.empty:
+                    result = self._fetch_yfinance(ticker, since)
+                    if result is not None:
+                        df, actual_ticker = result
                         self._save_prices(isin, df)
-                        fetched = ("yfinance", ticker)
+                        fetched = ("yfinance", actual_ticker)
                         break
                     time.sleep(0.5)
 
@@ -377,6 +380,9 @@ def main(argv=None):
     # ftgo logs its own progress using the DDMMYYYY strings it requires;
     # quiet it and emit our own yyyy-mm-dd lines instead.
     logging.getLogger("ftgo").setLevel(logging.WARNING)
+    # yfinance emits ERROR-level messages for each failed ticker attempt in its
+    # retry loop; these are expected when falling back to .L/.DE suffixes.
+    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
     parser = argparse.ArgumentParser(
         prog="hierofolio fetch",
