@@ -87,6 +87,72 @@ Key flags (all optional):
 
 Output includes a per-period rebalance log (so you can see how weights evolved) and overall out-of-sample annualised return, vol, Sharpe, and max drawdown.
 
+## Practical examples
+
+**Understand what the optimizer is doing**
+
+```bash
+./etf_analyze.py allocate --verbose
+```
+
+Shows the dendrogram leaf order, the branch variance at each bisection step, and how the budget is split between clusters. Useful when you want to understand *why* HRP gave a particular ETF a large or small allocation — it's always either because the ETF sits in its own branch (high diversification value) or because it shares a branch with other high-vol, high-corr assets.
+
+---
+
+**Compare HRP against constrained MVO out-of-sample**
+
+```bash
+./etf_analyze.py backtest --method hrp
+./etf_analyze.py backtest --method mvo --max-weight 0.5
+```
+
+HRP needs no return forecast; MVO uses trailing returns as its signal. Running both backtests lets you compare their out-of-sample Sharpe and max drawdown on *the same data*, which is the honest way to evaluate whether MVO's extra complexity pays off. In highly correlated universes (like all-equity), HRP typically holds up well because there is little structure for MVO to exploit.
+
+---
+
+**Check whether rebalancing frequency matters**
+
+```bash
+./etf_analyze.py backtest --step 1   # monthly
+./etf_analyze.py backtest --step 3   # quarterly (default)
+./etf_analyze.py backtest --step 12  # annually
+```
+
+More frequent rebalancing tracks the current risk structure more closely but incurs more transaction costs. Compare the out-of-sample Sharpe across frequencies to find the point of diminishing returns for your universe.
+
+---
+
+**Check whether the training window matters for MVO**
+
+```bash
+./etf_analyze.py backtest --method mvo --max-weight 0.5 --window 3
+./etf_analyze.py backtest --method mvo --max-weight 0.5 --window 5
+```
+
+A shorter window reacts faster to recent return trends but is noisier. A longer window is more stable but slower to adapt. If both produce similar Sharpe, the shorter window is preferable (less sensitivity to the starting date). If they diverge sharply, MVO is overfitting the trailing window and HRP is likely more robust.
+
+---
+
+**See how correlated your ETFs actually are before choosing a method**
+
+```bash
+./etf_analyze.py summary
+```
+
+Look at the correlation matrix. If all correlations are above 0.8, your universe is effectively one cluster — HRP will still work but diversification is limited regardless of method. The real gain comes from adding assets with lower correlation (e.g. bonds, gold, REITs), which gives HRP meaningful tree structure to exploit.
+
+---
+
+**Control concentration in MVO**
+
+```bash
+./etf_analyze.py allocate --method mvo                     # likely 100% in one ETF
+./etf_analyze.py allocate --method mvo --max-weight 0.5    # at most 50% per ETF
+./etf_analyze.py allocate --method mvo --max-weight 0.34   # forces roughly equal weight
+```
+
+Unconstrained MVO concentrates everything in the highest-Sharpe asset because historical returns are a noisy signal and the optimizer takes them at face value. `--max-weight` is the practical knob to control this; 0.4–0.5 is a common starting point for a 3–5 ETF portfolio.
+
 ## Risk model
 
 `risk_model.py` provides `HRPRiskModel` plus the `ConstrainedMVOOptimizer` and
