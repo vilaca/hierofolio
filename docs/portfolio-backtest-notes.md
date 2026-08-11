@@ -76,7 +76,7 @@ drawdown than MVO, tracking near equal-weight.
 - **Short OOS** (~4.8y, ~20 quarterly folds). Not enough to be conclusive.
 - Duplicate exposures inflate some raw weights: three S&P 500 trackers, two
   European funds, and two US-tech funds each split budget that economically is
-  one position. See the correlation matrix in `hierofolio analyze summary`.
+  one position. See the correlation matrix in `hfolio analyze summary`.
 
 ---
 
@@ -86,16 +86,16 @@ drawdown than MVO, tracking near equal-weight.
 EXCLUDE="--exclude IE0006WW1TQ4 IE0003XJA0J9 IE000YYE6WK5"
 
 # HRP — note the bond-concentration swings in the rebalance log
-hierofolio analyze backtest --method hrp $EXCLUDE --window 2 --step 3
+hfolio analyze backtest --method hrp $EXCLUDE --window 2 --step 3
 
 # MVO — tech-momentum concentration
-hierofolio analyze backtest --method mvo --max-weight 0.25 $EXCLUDE --window 2 --step 3
+hfolio analyze backtest --method mvo --max-weight 0.25 $EXCLUDE --window 2 --step 3
 
 # CRISP — the middle ground
-hierofolio analyze backtest --method crisp --corr-penalty 0.5 $EXCLUDE --window 2 --step 3
+hfolio analyze backtest --method crisp --corr-penalty 0.5 $EXCLUDE --window 2 --step 3
 
 # With transaction costs
-hierofolio analyze backtest --method mvo --max-weight 0.25 $EXCLUDE \
+hfolio analyze backtest --method mvo --max-weight 0.25 $EXCLUDE \
   --window 2 --step 3 --broker degiro --portfolio-size 10000
 ```
 
