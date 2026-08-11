@@ -204,6 +204,7 @@ def run_backtest(
     linkage_method: str = "ward",
     signal_model=None,
     gamma: float = 0.5,
+    tau: float = 1.0,
 ) -> tuple:
     """Rolling-window backtest. Returns (out-of-sample daily returns, rebalance log)."""
     if signal_model is None:
@@ -228,6 +229,8 @@ def run_backtest(
         method_params["gamma"] = gamma
         if max_weight is not None:
             method_params["max_weight"] = max_weight
+    if method == "hrp-sigma-mu":
+        method_params["tau"] = tau
 
     engine = WalkForwardEngine(
         risk_model_factory=_risk_model_factory,
@@ -288,12 +291,16 @@ Examples:
 
     allocate_parser = subparsers.add_parser('allocate', help='Compute portfolio weights')
     allocate_parser.add_argument(
-        '--method', choices=['hrp', 'schur-hrp', 'mvo', 'robust'], default='hrp',
+        '--method', choices=['hrp', 'schur-hrp', 'hrp-sigma-mu', 'mvo', 'robust'], default='hrp',
         help='Optimization method (default: hrp)'
     )
     allocate_parser.add_argument(
         '--gamma', type=float, default=0.5, metavar='γ',
         help='Schur-HRP cross-block weight (0=plain HRP, higher→toward min-variance; default 0.5)'
+    )
+    allocate_parser.add_argument(
+        '--tau', type=float, default=1.0, metavar='τ',
+        help='HRP-Σμ signal strength (0=plain HRP, higher→lean on expected return; default 1.0)'
     )
     allocate_parser.add_argument(
         '--max-weight', type=float, default=None, metavar='W',
@@ -326,12 +333,16 @@ Examples:
 
     backtest_parser = subparsers.add_parser('backtest', help='Rolling-window out-of-sample backtest')
     backtest_parser.add_argument(
-        '--method', choices=['hrp', 'schur-hrp', 'mvo', 'robust'], default='hrp',
+        '--method', choices=['hrp', 'schur-hrp', 'hrp-sigma-mu', 'mvo', 'robust'], default='hrp',
         help='Optimization method (default: hrp)'
     )
     backtest_parser.add_argument(
         '--gamma', type=float, default=0.5, metavar='γ',
         help='Schur-HRP cross-block weight (0=plain HRP, higher→toward min-variance; default 0.5)'
+    )
+    backtest_parser.add_argument(
+        '--tau', type=float, default=1.0, metavar='τ',
+        help='HRP-Σμ signal strength (0=plain HRP, higher→lean on expected return; default 1.0)'
     )
     backtest_parser.add_argument('--window', type=int, default=3, metavar='YEARS',
                                  help='Training window in years (default: 3)')
@@ -464,6 +475,7 @@ Examples:
                 "risk_aversion": args.risk_aversion,
                 "robustness_penalty": args.robustness_penalty,
                 "gamma": args.gamma,
+                "tau": args.tau,
             }
             weights = ALLOCATORS[method].allocate(
                 risk_model, signal=mu, current_weights=None, **method_params
@@ -540,6 +552,7 @@ Examples:
                 shrinkage_intensity=args.shrinkage_intensity,
                 linkage_method=args.linkage_method,
                 gamma=args.gamma,
+                tau=args.tau,
             )
 
             names = read_names(DEFAULT_CONFIG)

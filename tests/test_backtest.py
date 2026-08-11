@@ -192,6 +192,18 @@ def test_param_selection_recovers_best_param():
 
 
 # ---------------------------------------------------------------------------
+# HRP-Σμ backtest — valid OOS series and weight sum
+# ---------------------------------------------------------------------------
+
+def test_run_backtest_hrp_sigma_mu(returns):
+    oos, ew, log = run_backtest(returns, method="hrp-sigma-mu", window_years=2, step_months=6)
+    assert len(oos) > 0
+    assert not oos.isna().any()
+    for entry in log:
+        assert abs(entry["weights"].sum() - 1.0) < 1e-9
+
+
+# ---------------------------------------------------------------------------
 # No-lookahead assertion on inner param selection
 # ---------------------------------------------------------------------------
 

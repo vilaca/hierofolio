@@ -210,6 +210,60 @@ class SchurHRPAllocator:
         return pd.Series(weights, index=list(ordered_cov.index))
 
 
+class HRPSigmaMuAllocator:
+    """Signal-aware HRP: tilts each budget split toward higher-μ branches.
+
+    tau=0 reproduces HRP exactly (exp(0)=1 reduces the split to plain
+    inverse-variance, α = v_R/(v_L+v_R)). As tau grows the allocation leans
+    toward whichever branch has the higher inverse-variance-weighted expected
+    return. Requires a signal (annualized μ); raises ValueError if absent or
+    if any asset is missing from the signal.
+
+    Spectrum: risk-only HRP (tau=0) → signal-aware HRP-Σμ → MVO (high tau, large signal).
+    """
+
+    def allocate(
+        self,
+        risk_model: RiskModel,
+        signal: Optional[pd.Series] = None,
+        current_weights: Optional[pd.Series] = None,
+        tau: float = 1.0,
+        **params,
+    ) -> pd.Series:
+        if signal is None:
+            raise ValueError("HRPSigmaMuAllocator requires a signal (mu).")
+        cov = risk_model.covariance()
+        assets = risk_model.leaf_order
+        mu = signal.reindex(assets)
+        if mu.isna().any():
+            raise ValueError("signal must cover all assets in the risk model.")
+
+        def cluster_var_and_mu(cluster):
+            sub = cov.loc[cluster, cluster].values
+            inv_diag = 1.0 / np.diag(sub)
+            w = inv_diag / inv_diag.sum()
+            return float(w @ sub @ w), float(w @ mu.loc[cluster].values)
+
+        weights = pd.Series(1.0, index=assets)
+        clusters = [list(assets)]
+        while clusters:
+            next_clusters = []
+            for c in clusters:
+                if len(c) > 1:
+                    mid = len(c) // 2
+                    left, right = c[:mid], c[mid:]
+                    lv, lm = cluster_var_and_mu(left)
+                    rv, rm = cluster_var_and_mu(right)
+                    score_l = (1.0 / lv) * np.exp(tau * lm)
+                    score_r = (1.0 / rv) * np.exp(tau * rm)
+                    alpha = score_l / (score_l + score_r)
+                    weights[left] *= alpha
+                    weights[right] *= 1 - alpha
+                    next_clusters += [left, right]
+            clusters = next_clusters
+        return weights / weights.sum()
+
+
 class MVOAllocator:
     def allocate(
         self,
@@ -247,6 +301,7 @@ class RobustAllocator:
 ALLOCATORS: dict = {
     "hrp": HRPAllocator(),
     "schur-hrp": SchurHRPAllocator(),
+    "hrp-sigma-mu": HRPSigmaMuAllocator(),
     "mvo": MVOAllocator(),
     "robust": RobustAllocator(),
 }

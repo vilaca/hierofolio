@@ -71,6 +71,7 @@ so the commands work from any directory. Override with `--config`, `--db`, and
 |--------|-------------|
 | `hrp` | [Hierarchical Risk Parity](https://en.wikipedia.org/wiki/Hierarchical_Risk_Parity) — splits money down the [clustering tree](https://en.wikipedia.org/wiki/Hierarchical_clustering) inversely to cluster variance. No return forecast needed. |
 | `schur-hrp` | Schur-complementary HRP — plain HRP that *also* uses the correlations **between** clusters (which HRP ignores), folded back in via the [Schur complement](https://en.wikipedia.org/wiki/Schur_complement). A `--gamma` dial runs from plain HRP (0) toward a lower-variance, min-variance-like allocation. No return forecast needed. |
+| `hrp-sigma-mu` | Signal-aware HRP — keeps HRP's dendrogram structure but tilts each budget split toward the higher-expected-return branch, controlled by `--tau`. At `--tau 0` it is exactly HRP; higher values lean harder on expected return. Requires a return forecast (historical mean by default). |
 | `mvo` | [Mean-Variance Optimization](https://en.wikipedia.org/wiki/Modern_portfolio_theory) — maximises return minus risk, using historical returns as the signal. Concentrates without `--max-weight`. |
 | `robust` | Robust MVO — like MVO but penalises uncertainty in the return forecast, spreading weights away from concentrated positions. Tune with `--robustness-penalty` (try 10–100). |
 
@@ -79,6 +80,7 @@ Key flags (all optional):
 | Flag | Values | Default | Effect |
 |------|--------|---------|--------|
 | `--gamma γ` | 0–1 | 0.5 | Schur-HRP only. `0` = plain HRP; higher folds in more of the between-cluster correlation, pulling toward a min-variance-like allocation. Try `0.25`–`0.5`; very high values can overshoot, so verify with a backtest. |
+| `--tau τ` | ≥ 0 | 1.0 | HRP-Σμ only. `0` = plain HRP; higher tilts more weight toward higher-expected-return branches. Values of 1–10 produce visible tilts given annualised μ. |
 | `--max-weight W` | 0–1 | none | Cap any single ETF at W (e.g. `0.5`). Essential for MVO/Robust to avoid full concentration. |
 | `--risk-aversion λ` | > 0 | 1.0 | Higher → more risk-averse; shifts MVO/Robust toward lower-vol allocations. |
 | `--robustness-penalty ρ` | > 0 | 1.0 | Robust only. Higher → more diversification regardless of the alpha signal. Try 10–100. |
@@ -94,8 +96,9 @@ Key flags (all optional):
 |------|--------|---------|--------|
 | `--window YEARS` | > 0 | 3 | Length of the training window in years. |
 | `--step MONTHS` | > 0 | 3 | Rebalance frequency in months (3 = quarterly). |
-| `--method` | `hrp`, `schur-hrp`, `mvo`, `robust` | `hrp` | Same methods and flags as `allocate`. |
+| `--method` | `hrp`, `schur-hrp`, `hrp-sigma-mu`, `mvo`, `robust` | `hrp` | Same methods and flags as `allocate`. |
 | `--gamma γ` | 0–1 | 0.5 | Schur-HRP only. `0` = plain HRP; higher pulls toward a min-variance-like allocation. |
+| `--tau τ` | ≥ 0 | 1.0 | HRP-Σμ only. `0` = plain HRP; higher leans on expected return. |
 | `--shrinkage-method` | `ledoit_wolf`, `constant_correlation`, `identity` | `constant_correlation` | Covariance shrinkage estimator. |
 | `--shrinkage-intensity α` | 0–1 | 0.3 | Blend between sample and target covariance. Ignored for `ledoit_wolf`. |
 | `--linkage-method` | `ward`, `average`, `complete`, `single` | `ward` | Hierarchical clustering linkage. |
@@ -246,6 +249,33 @@ hierofolio analyze backtest --broker degiro --portfolio-size 10000 --step 12  # 
 *Why:* More frequent rebalancing keeps your weights accurate but costs more. Annual rebalancing is cheaper but lets the portfolio drift. This comparison tells you where the trade-off lands for your broker and portfolio size — often annual rebalancing is competitive with quarterly once costs are included.
 
 *How it works:* `--step 3` generates a rebalance date every 3 months; `--step 12` every 12 months. Fewer rebalances means the cost formula runs fewer times, so the total cost drag is smaller. It also means the optimizer re-fits its weights less often, so it reacts more slowly to changing market conditions. The two runs let you weigh cheaper trading against staler weights for your specific numbers. (Note: within each hold period the backtest keeps the target weights fixed each day, so it measures the cost and re-fit effects, not real-world weight drift.)
+
+---
+
+### Tilt toward higher-returning ETFs while keeping HRP's structure (HRP-Σμ)
+
+```bash
+hierofolio analyze allocate --method hrp-sigma-mu
+hierofolio analyze allocate --method hrp-sigma-mu --tau 5
+```
+
+*Why:* Plain HRP ignores whether an ETF or group of ETFs is expected to return more than another — two branches get split purely by their risk. HRP-Σμ keeps that same dendrogram structure but leans the budget toward whichever branch has the higher expected return, controlled by `--tau`. At `--tau 0` it is mathematically identical to HRP. As tau rises it shifts money toward the higher-return branch. This is useful when you believe your ETFs genuinely have different expected returns — e.g. a value tilt vs. a bond fund — and want to express that view without abandoning the clustering that makes HRP robust. Start with the default (`--tau 1`); try `--tau 3`–`5` if you want a stronger lean, but always confirm with a backtest first.
+
+*How it works:* At each split of the cluster tree it computes two scores — one for the left branch and one for the right. Each score is the branch's inverse-variance weight (same as HRP) multiplied by `exp(τ × m)`, where `m` is the inverse-variance-weighted average expected return of that branch. The left branch gets a share of the parent's budget equal to `score_left / (score_left + score_right)`. When `τ = 0` both exponentials equal 1 and the formula collapses to HRP's exact split — `v_right / (v_left + v_right)`. When τ is larger, the branch with the higher `m` gets an exponentially bigger score, pulling more of the budget its way. Expected return is estimated from historical mean (annualised). The return and risk estimates use the same inverse-variance within-cluster weights, so the two are consistent.
+
+---
+
+### Find the right signal strength (τ) for your ETF universe
+
+```bash
+hierofolio analyze backtest --method hrp-sigma-mu --tau 0
+hierofolio analyze backtest --method hrp-sigma-mu --tau 1
+hierofolio analyze backtest --method hrp-sigma-mu --tau 5
+```
+
+*Why:* How much to trust the expected-return signal depends on how stable that signal is for your specific ETFs. Historical mean returns are noisy — a τ that looks great in-sample can overfit and hurt you out-of-sample. Because `--tau 0` is exactly plain HRP, this sweep directly answers the question: does leaning on expected return actually help, and by how much? If `--tau 0` wins out-of-sample, the return signal is too noisy to be useful for your universe. If a moderate tau wins, you've found a real edge. Compare the out-of-sample Sharpe ratios and maximum drawdowns to decide.
+
+*How it works:* All three runs use the same rebalance dates, training windows, and clustering — the only difference is how strongly the expected-return signal tilts each budget split. At each rebalance the engine estimates historical mean returns on the training window and passes them to HRP-Σμ together with the covariance matrix. A higher τ makes the split formula more sensitive to differences in those means; a lower τ falls back toward pure risk-based splitting. Comparing the resulting equity curves tells you whether your ETFs' return differences are persistent enough out-of-sample to be worth exploiting.
 
 ## Risk model
 

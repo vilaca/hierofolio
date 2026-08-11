@@ -4,6 +4,7 @@ import pytest
 
 from hierofolio.allocators import (
     HRPAllocator,
+    HRPSigmaMuAllocator,
     MVOAllocator,
     RobustAllocator,
     SchurHRPAllocator,
@@ -174,6 +175,53 @@ def test_schur_gamma1_uses_cross_block_info(risk_model4):
 def test_schur_gamma_out_of_range_raises(risk_model4, gamma):
     with pytest.raises(ValueError, match="gamma"):
         SchurHRPAllocator().allocate(risk_model4, gamma=gamma)
+
+
+# ---------------------------------------------------------------------------
+# HRPSigmaMuAllocator — τ=0 ≡ HRP, monotone tilt, protocol conformance
+# ---------------------------------------------------------------------------
+
+def test_sigma_mu_tau0_equals_hrp(risk_model):
+    mu, _ = HistoricalMeanSignal().signal(make_returns())
+    w_sm = HRPSigmaMuAllocator().allocate(risk_model, signal=mu, tau=0.0)
+    w_hrp = hrp_weights(risk_model)
+    assert np.allclose(w_sm.reindex(w_hrp.index).values, w_hrp.values)
+
+
+def test_sigma_mu_monotone_tilt(risk_model4):
+    order = risk_model4.leaf_order
+    left, right = order[:2], order[2:]
+    # Give the left branch clearly higher expected return.
+    mu = pd.Series({a: 0.10 for a in left} | {a: 0.01 for a in right})
+
+    w0 = HRPSigmaMuAllocator().allocate(risk_model4, signal=mu, tau=0.0)
+    w1 = HRPSigmaMuAllocator().allocate(risk_model4, signal=mu, tau=1.0)
+    w5 = HRPSigmaMuAllocator().allocate(risk_model4, signal=mu, tau=5.0)
+
+    assert w1[left].sum() >= w0[left].sum()
+    assert w5[left].sum() >= w1[left].sum()
+
+
+@pytest.mark.parametrize("tau", [0.0, 1.0, 5.0])
+def test_sigma_mu_weights_valid(risk_model4, tau):
+    mu, _ = HistoricalMeanSignal().signal(make_returns(n_assets=4))
+    w = HRPSigmaMuAllocator().allocate(risk_model4, signal=mu, tau=tau)
+    assert abs(w.sum() - 1.0) < 1e-9
+    assert (w >= 0).all()
+    assert set(w.index) == set(risk_model4.covariance().index)
+
+
+def test_sigma_mu_missing_signal_raises(risk_model):
+    with pytest.raises(ValueError, match="signal"):
+        HRPSigmaMuAllocator().allocate(risk_model)
+
+
+def test_sigma_mu_partial_signal_raises(risk_model, returns):
+    mu, _ = HistoricalMeanSignal().signal(returns)
+    # Drop one asset from the signal to make it partial.
+    partial_mu = mu.drop(mu.index[0])
+    with pytest.raises(ValueError, match="signal"):
+        HRPSigmaMuAllocator().allocate(risk_model, signal=partial_mu)
 
 
 # ---------------------------------------------------------------------------
