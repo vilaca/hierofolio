@@ -65,9 +65,12 @@ def read_prices(db_path: str, isin: str = None) -> pd.DataFrame:
         return df.pivot(index='date', columns='isin', values='close')
 
 
-def read_returns(db_path: str, isin: str = None) -> pd.DataFrame:
+def read_returns(db_path: str, isin: str = None, exclude: list = None) -> pd.DataFrame:
     """Daily simple returns derived from the stored prices."""
-    return read_prices(db_path, isin).pct_change().dropna()
+    prices = read_prices(db_path, isin)
+    if exclude:
+        prices = prices.drop(columns=[c for c in exclude if c in prices.columns])
+    return prices.pct_change().dropna()
 
 
 def read_currencies(meta_path: str = DEFAULT_CURRENCY_META) -> dict:
@@ -330,6 +333,10 @@ Examples:
         help='CRISP soft L1 turnover penalty (default: 0.0)'
     )
     allocate_parser.add_argument(
+        '--exclude', nargs='+', default=[], metavar='ISIN',
+        help='ISINs to exclude from the analysis (e.g. funds with too little history)'
+    )
+    allocate_parser.add_argument(
         '--verbose', action='store_true',
         help='Show HRP bisection steps (leaf order, branch variances, budget splits)'
     )
@@ -374,6 +381,10 @@ Examples:
     backtest_parser.add_argument(
         '--turnover-penalty', type=float, default=0.0, metavar='τ',
         help='CRISP soft L1 turnover penalty (default: 0.0)'
+    )
+    backtest_parser.add_argument(
+        '--exclude', nargs='+', default=[], metavar='ISIN',
+        help='ISINs to exclude from the analysis (e.g. funds with too little history)'
     )
     backtest_parser.add_argument(
         '--shrinkage-method', choices=['ledoit_wolf', 'constant_correlation', 'identity'],
@@ -473,7 +484,7 @@ Examples:
 
     if args.command == 'allocate':
         try:
-            returns = read_returns(args.db)
+            returns = read_returns(args.db, exclude=args.exclude or None)
             if returns.empty:
                 print("No returns data. Run: ./etf_fetch.py")
                 return 1
@@ -529,7 +540,7 @@ Examples:
 
     if args.command == 'backtest':
         try:
-            returns = read_returns(args.db)
+            returns = read_returns(args.db, exclude=args.exclude or None)
             if returns.empty:
                 print("No returns data. Run: ./etf_fetch.py")
                 return 1
