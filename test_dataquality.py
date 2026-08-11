@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from etf_analyze import quality_report, read_long, currency_warning
+from etf_analyze import quality_report, read_long, currency_warning, cost_currency_warning
 
 DB_PATH = "hierofolio.db"
 MAX_GAP_DAYS = 5          # a long weekend + a holiday or two
@@ -105,6 +105,29 @@ def test_currency_warning_flags_mixed(tmp_path):
 
 def test_currency_warning_absent_sidecar_is_silent(tmp_path):
     assert currency_warning(["A", "B"], str(tmp_path / "missing.yaml")) is None
+
+
+def test_cost_currency_warning_flags_eur_fee_on_non_eur_panel(tmp_path):
+    meta = tmp_path / "c.yaml"
+    _write_meta(meta, {"A": "USD", "B": "USD"})
+    # A flat (or min) EUR fee against a USD panel should warn.
+    msg = cost_currency_warning(["A", "B"], flat_fee_eur=1.0, min_fee_eur=0.0, meta_path=str(meta))
+    assert msg and "USD" in msg
+    msg_min = cost_currency_warning(["A", "B"], flat_fee_eur=0.0, min_fee_eur=1.25, meta_path=str(meta))
+    assert msg_min and "USD" in msg_min
+
+
+def test_cost_currency_warning_silent_for_eur_panel(tmp_path):
+    meta = tmp_path / "c.yaml"
+    _write_meta(meta, {"A": "EUR", "B": "EUR"})
+    assert cost_currency_warning(["A", "B"], flat_fee_eur=1.0, min_fee_eur=1.25, meta_path=str(meta)) is None
+
+
+def test_cost_currency_warning_silent_without_absolute_fee(tmp_path):
+    meta = tmp_path / "c.yaml"
+    _write_meta(meta, {"A": "USD", "B": "USD"})
+    # bps-only cost is currency-invariant, so no warning even on a USD panel.
+    assert cost_currency_warning(["A", "B"], flat_fee_eur=0.0, min_fee_eur=0.0, meta_path=str(meta)) is None
 
 
 @pytest.mark.skipif(not os.path.exists(DB_PATH), reason=f"{DB_PATH} not present")

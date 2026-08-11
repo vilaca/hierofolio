@@ -2,6 +2,9 @@
 #
 # flat_eur:      flat fee per trade in EUR (charged per asset traded)
 # bps_per_side:  spread + commission in basis points (1 bps = 0.01%), one-way
+# min_eur:       per-trade minimum commission in EUR (optional, default 0);
+#                the per-asset cost is never less than this, modelling brokers
+#                whose floor dominates on small trades
 #
 # These are approximations for liquid UCITS ETFs on major exchanges.
 # Country-specific transaction taxes are NOT included — add them via
@@ -32,4 +35,5 @@ ibkr:
   name: Interactive Brokers
   flat_eur: 0.0
   bps_per_side: 5.0
-  note: "~0.05%/side, min €1.25; approximated as 5 bps/side for trades above €2,500"
+  min_eur: 1.25
+  note: "~0.05%/side (5 bps), min €1.25/order — the floor dominates on trades below €2,500"

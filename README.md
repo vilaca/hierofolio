@@ -98,7 +98,7 @@ Output includes a per-period rebalance log, overall out-of-sample statistics ver
 
 ### Broker cost profiles
 
-Transaction costs are modelled per rebalance as: `flat_fee_eur + bps_per_side × notional_traded` per asset. Profiles are stored in `broker_profiles.yaml` and can be edited to reflect your actual terms.
+Transaction costs are modelled per rebalance as: `max(min_eur, flat_fee_eur + bps_per_side × notional_traded)` per asset. The optional `min_eur` is a per-order commission floor (e.g. IBKR's €1.25) that dominates on small trades. Profiles are stored in `broker_profiles.yaml` and can be edited to reflect your actual terms.
 
 | Profile key | Broker | Model | Approx cost on €10k trade |
 |-------------|--------|-------|--------------------------|

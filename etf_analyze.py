@@ -88,6 +88,26 @@ def currency_warning(isins, meta_path: str = DEFAULT_CURRENCY_META):
     return None
 
 
+def cost_currency_warning(isins, flat_fee_eur, min_fee_eur,
+                          meta_path: str = DEFAULT_CURRENCY_META):
+    """Warn if a EUR-denominated fee is applied to a non-EUR panel.
+
+    Percentage (bps) costs are currency-invariant, but the flat and minimum
+    fees are absolute euros — only meaningful when both `--portfolio-size` and
+    the panel are in EUR. Returns a message when such a fee meets a panel whose
+    known quote currency isn't purely EUR (there is no FX conversion), else None.
+    """
+    if flat_fee_eur <= 0 and min_fee_eur <= 0:
+        return None
+    ccy = read_currencies(meta_path)
+    known = {ccy.get(isin, '') for isin in isins} - {''}
+    if known and known != {'EUR'}:
+        return (f"Flat/minimum fees are in EUR but the panel quotes in "
+                f"{sorted(known)}; euro fees and --portfolio-size assume a EUR "
+                f"book (no FX conversion is applied).")
+    return None
+
+
 def quality_report(prices: pd.DataFrame) -> dict:
     """Data-quality metrics for a long (isin, date, close) price frame.
 
@@ -202,12 +222,18 @@ def _rebalance_cost(
     portfolio_size_eur: float,
     flat_fee_eur: float,
     cost_bps_per_side: float,
+    min_fee_eur: float = 0.0,
 ) -> float:
-    """Transaction cost as a fraction of portfolio value for one rebalance."""
+    """Transaction cost as a fraction of portfolio value for one rebalance.
+
+    Per traded asset the cost is ``flat_fee_eur + bps × notional`` but never
+    less than ``min_fee_eur`` — modelling brokers (e.g. IBKR) whose commission
+    has a per-order floor that dominates on small trades.
+    """
     deltas = (w_new - w_old).abs()
     traded = deltas[deltas > 1e-4]  # skip dust-level changes
     cost_eur = sum(
-        flat_fee_eur + cost_bps_per_side / 10_000 * delta * portfolio_size_eur
+        max(min_fee_eur, flat_fee_eur + cost_bps_per_side / 10_000 * delta * portfolio_size_eur)
         for delta in traded
     )
     return cost_eur / portfolio_size_eur
@@ -223,6 +249,7 @@ def run_backtest(
     robustness_penalty: float = 1.0,
     flat_fee_eur: float = 0.0,
     cost_bps_per_side: float = 0.0,
+    min_fee_eur: float = 0.0,
     portfolio_size_eur: float = 10_000.0,
     shrinkage_method: str = "constant_correlation",
     shrinkage_intensity: float = 0.3,
@@ -290,7 +317,9 @@ def run_backtest(
         # Deduct transaction cost from the first day of the hold period
         w_old = prev_weights if prev_weights is not None else pd.Series(
             1 / len(weights), index=weights.index)
-        cost = _rebalance_cost(w_old, weights, portfolio_size_eur, flat_fee_eur, cost_bps_per_side)
+        cost = _rebalance_cost(
+            w_old, weights, portfolio_size_eur, flat_fee_eur, cost_bps_per_side, min_fee_eur
+        )
         period_oos.iloc[0] -= cost
 
         oos_segments.append(period_oos)
@@ -562,16 +591,25 @@ Examples:
             if args.cost_bps is not None:
                 flat_fee_eur = 0.0
                 cost_bps_per_side = args.cost_bps / 2
+                min_fee_eur = 0.0
                 cost_label = f"manual ({args.cost_bps} bps round-trip)"
             elif args.broker:
                 profile = BROKER_PROFILES[args.broker]
                 flat_fee_eur = profile['flat_eur']
                 cost_bps_per_side = profile['bps_per_side']
+                min_fee_eur = profile.get('min_eur', 0.0)
                 cost_label = f"{profile['name']} — {profile['note']}"
             else:
                 flat_fee_eur = 0.0
                 cost_bps_per_side = 0.0
+                min_fee_eur = 0.0
                 cost_label = "none (use --broker or --cost-bps to model transaction costs)"
+
+            cost_ccy_warning = cost_currency_warning(
+                returns.columns, flat_fee_eur, min_fee_eur, args.currency_meta
+            )
+            if cost_ccy_warning:
+                print(f"⚠ {cost_ccy_warning}")
 
             oos_returns, ew_returns, log = run_backtest(
                 returns=returns,
@@ -583,6 +621,7 @@ Examples:
                 robustness_penalty=args.robustness_penalty,
                 flat_fee_eur=flat_fee_eur,
                 cost_bps_per_side=cost_bps_per_side,
+                min_fee_eur=min_fee_eur,
                 portfolio_size_eur=args.portfolio_size,
                 shrinkage_method=args.shrinkage_method,
                 shrinkage_intensity=args.shrinkage_intensity,
@@ -597,7 +636,7 @@ Examples:
             print(f"Hierofolio Backtest — {args.method.upper()}")
             print(f"Window: {args.window}y  Step: {args.step}m  Periods: {len(log)}")
             print(f"Cost:   {cost_label}")
-            if flat_fee_eur > 0:
+            if flat_fee_eur > 0 or min_fee_eur > 0:
                 print(f"        (portfolio size: €{args.portfolio_size:,.0f})")
             print("=" * 70)
 

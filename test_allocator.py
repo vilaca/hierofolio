@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from etf_analyze import hrp_weights, portfolio_stats, run_backtest
+from etf_analyze import _rebalance_cost, hrp_weights, portfolio_stats, run_backtest
 from risk_model import HRPRiskModel
 
 
@@ -159,3 +159,46 @@ def test_run_backtest_insufficient_data():
     short = make_returns(n_obs=100)  # ~5 months, can't fit a 3-year window
     with pytest.raises(ValueError, match="Not enough data"):
         run_backtest(short, method="hrp", window_years=3)
+
+
+# ---------------------------------------------------------------------------
+# _rebalance_cost — per-order minimum fee
+# ---------------------------------------------------------------------------
+
+def test_rebalance_cost_min_fee_floors_small_trade():
+    # One asset moves 10% → notional €100 on a €1,000 book. At 5 bps the
+    # commission is €0.05, well below the €1.25 floor, so the floor applies.
+    w_old = pd.Series({"A": 0.5, "B": 0.5})
+    w_new = pd.Series({"A": 0.6, "B": 0.4})
+    cost = _rebalance_cost(
+        w_old, w_new, portfolio_size_eur=1_000.0,
+        flat_fee_eur=0.0, cost_bps_per_side=5.0, min_fee_eur=1.25,
+    )
+    # Two assets traded → 2 × €1.25 floor = €2.50 on a €1,000 book.
+    assert cost == pytest.approx(2.50 / 1_000.0)
+
+
+def test_rebalance_cost_min_fee_inactive_on_large_trade():
+    # Same 10% move but on a €1,000,000 book: notional €100k, 5 bps = €50,
+    # far above the €1.25 floor, so bps dominates and the floor is inert.
+    w_old = pd.Series({"A": 0.5, "B": 0.5})
+    w_new = pd.Series({"A": 0.6, "B": 0.4})
+    with_floor = _rebalance_cost(
+        w_old, w_new, portfolio_size_eur=1_000_000.0,
+        flat_fee_eur=0.0, cost_bps_per_side=5.0, min_fee_eur=1.25,
+    )
+    without_floor = _rebalance_cost(
+        w_old, w_new, portfolio_size_eur=1_000_000.0,
+        flat_fee_eur=0.0, cost_bps_per_side=5.0, min_fee_eur=0.0,
+    )
+    assert with_floor == pytest.approx(without_floor)
+
+
+def test_rebalance_cost_min_fee_default_is_zero():
+    # Omitting min_fee_eur must reproduce the pre-floor behaviour exactly.
+    w_old = pd.Series({"A": 0.5, "B": 0.5})
+    w_new = pd.Series({"A": 0.6, "B": 0.4})
+    kwargs = dict(portfolio_size_eur=10_000.0, flat_fee_eur=1.0, cost_bps_per_side=3.0)
+    assert _rebalance_cost(w_old, w_new, **kwargs) == pytest.approx(
+        _rebalance_cost(w_old, w_new, min_fee_eur=0.0, **kwargs)
+    )
