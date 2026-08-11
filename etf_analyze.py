@@ -208,6 +208,10 @@ Examples:
         '--risk-aversion', type=float, default=1.0, metavar='λ',
         help='Risk aversion for mvo/robust (default: 1.0)'
     )
+    allocate_parser.add_argument(
+        '--robustness-penalty', type=float, default=1.0, metavar='ρ',
+        help='Robustness penalty for robust method (default: 1.0; try 10–100 to see diversification)'
+    )
 
     args = parser.parse_args()
 
@@ -315,6 +319,7 @@ Examples:
                         risk_model=risk_model,
                         alpha=alpha,
                         risk_aversion=args.risk_aversion,
+                        robustness_penalty=args.robustness_penalty,
                     )
                 weights = optimizer.solve(max_weight=args.max_weight)
 
