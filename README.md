@@ -196,6 +196,9 @@ the fund's own base currency (parsed from its name, e.g. "… USD (Acc)" → the
 USD line), falling back to the first match. The choice is recorded in
 `currency_metadata.yaml`.
 
+**Does HRP favour low-volatility assets?**
+Not directly — that's Risk Parity (a different method). HRP operates on *clusters*, not individual assets. At each split in the dendrogram it divides the budget between two branches inversely proportional to each branch's variance: the higher-variance branch gets less. Within a branch, an asset with higher vol than its peers gets a smaller slice of that branch's budget. The net effect is that HRP rewards **diversification value** — an asset that is lowly correlated with everything else gets its own branch and therefore a full share of the budget regardless of its own volatility. A highly correlated, high-vol pair share a branch and together receive less. So the driver is correlation structure first, volatility second.
+
 **Can I mix currencies across ETFs in the analysis?**
 Not meaningfully. Per-asset daily returns are currency-invariant, but a
 covariance/HRP across assets is only coherent if every series is in the same
