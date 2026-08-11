@@ -171,7 +171,7 @@ def portfolio_stats(weights: pd.Series, returns: pd.DataFrame) -> dict:
     port_returns = returns.values @ w
     ann_vol = float(np.std(port_returns, ddof=1) * np.sqrt(252))
     ann_return = float((1 + port_returns).prod() ** (252 / len(port_returns)) - 1)
-    sharpe = ann_return / ann_vol if ann_vol > 0 else float("nan")
+    sharpe = ann_return / ann_vol if ann_vol > 1e-10 else float("nan")
     return {"Ann Return": ann_return, "Ann Vol": ann_vol, "Sharpe": sharpe}
 
 
@@ -203,6 +203,7 @@ def run_backtest(
         )
 
     oos_segments = []
+    ew_segments = []
     log = []
 
     for i, rebal_date in enumerate(rebalance_dates):
@@ -240,12 +241,13 @@ def run_backtest(
             continue
 
         oos_segments.append(hold @ weights.reindex(hold.columns).fillna(0))
+        ew_segments.append(hold.mean(axis=1))
         log.append({'date': rebal_date.date(), 'n_train': len(train), 'weights': weights})
 
     if not oos_segments:
         raise ValueError("No out-of-sample periods were generated.")
 
-    return pd.concat(oos_segments), log
+    return pd.concat(oos_segments), pd.concat(ew_segments), log
 
 
 def main():
@@ -460,7 +462,7 @@ Examples:
             if warning:
                 print(f"⚠ {warning}")
 
-            oos_returns, log = run_backtest(
+            oos_returns, ew_returns, log = run_backtest(
                 returns=returns,
                 method=args.method,
                 window_years=args.window,
@@ -486,19 +488,25 @@ Examples:
             print("\nRebalance Log:")
             print(weight_df.map(lambda x: f"{x:.1%}").to_string())
 
-            # Out-of-sample stats
-            ann_vol = float(oos_returns.std(ddof=1) * np.sqrt(252))
-            ann_return = float((1 + oos_returns).prod() ** (252 / len(oos_returns)) - 1)
-            sharpe = ann_return / ann_vol if ann_vol > 0 else float("nan")
-            equity = (1 + oos_returns).cumprod()
-            max_dd = float(((equity - equity.cummax()) / equity.cummax()).min())
+            # Out-of-sample stats — strategy vs equal-weight benchmark
+            def _stats(r):
+                vol = float(r.std(ddof=1) * np.sqrt(252))
+                ret = float((1 + r).prod() ** (252 / len(r)) - 1)
+                eq = (1 + r).cumprod()
+                dd = float(((eq - eq.cummax()) / eq.cummax()).min())
+                return ret, vol, ret / vol if vol > 0 else float("nan"), dd
+
+            s_ret, s_vol, s_shr, s_dd = _stats(oos_returns)
+            e_ret, e_vol, e_shr, e_dd = _stats(ew_returns)
             start, end = oos_returns.index[0].date(), oos_returns.index[-1].date()
+            label = args.method.upper()
 
             print(f"\nOut-of-Sample Statistics ({start} → {end}):")
-            print(f"  Ann Return   {ann_return:8.2%}")
-            print(f"  Ann Vol      {ann_vol:8.2%}")
-            print(f"  Sharpe       {sharpe:8.4f}")
-            print(f"  Max Drawdown {max_dd:8.2%}")
+            print(f"  {'':20}  {label:>12}  {'Equal Weight':>12}")
+            print(f"  {'Ann Return':20}  {s_ret:>11.2%}  {e_ret:>11.2%}")
+            print(f"  {'Ann Vol':20}  {s_vol:>11.2%}  {e_vol:>11.2%}")
+            print(f"  {'Sharpe':20}  {s_shr:>11.4f}  {e_shr:>11.4f}")
+            print(f"  {'Max Drawdown':20}  {s_dd:>11.2%}  {e_dd:>11.2%}")
         except Exception as e:
             print(f"✗ Error: {e}")
             return 1
